@@ -38,8 +38,9 @@ jobs:
     - name: Build
       run: msbuild.exe NINASonyCameraPlugin.sln /nologo /nr:false /p:DeployOnBuild=true /p:DeployDefaultTarget=WebPublish /p:WebPublishMethod=FileSystem /p:DeleteExistingFiles=True /p:platform="Any CPU" /p:configuration="Release" /p:PublishUrl="../_build"
 
-    - name: Upload DLL
+    - name: Upload SonyCamera DLL
       uses: actions/upload-artifact@v4
       with:
-        name: NINASonyCameraPlugin-dll
-        path: _build/**/*.dll
+        name: SonyCamera-DLL
+        path: |
+          **/bin/Release/**/NINA.RetroKiwi.Plugin.SonyCamera.dll
