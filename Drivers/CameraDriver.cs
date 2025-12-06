@@ -47,6 +47,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private short _readoutModeForSnapImages;
         private short _readoutModeForNormalImages;
         private AsyncObservableCollection<BinningMode> _binningModes;
+        private readonly object _captureLock = new object();
 
         public CameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, SonyDevice device) {
             _profileService = profileService;
@@ -89,6 +90,39 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             RaisePropertyChanged(nameof(GainMax));
             RaisePropertyChanged(nameof(Gain));
             RaisePropertyChanged(nameof(Gains));
+        }
+
+        private bool TryCancelCapture(string reason) {
+            if (_camera == null) {
+                return false;
+            }
+
+            lock (_captureLock) {
+                try {
+                    SonyDriver driver = SonyDriver.GetInstance();
+                    uint status;
+
+                    try {
+                        status = driver.GetCaptureStatus(_camera.Handle);
+                    } catch (Exception ex) {
+                        Logger.Warning($"Skipping cancel ({reason}) because capture status could not be read: {ex.Message}");
+                        return false;
+                    }
+
+                    uint[] cancellableStates = { CAPTURE_CAPTURING, CAPTURE_STARTING, CAPTURE_READING, CAPTURE_PROCESSING };
+                    if (!cancellableStates.Contains(status)) {
+                        Logger.Debug($"Skip cancel ({reason}); capture status is {status}");
+                        return false;
+                    }
+
+                    Logger.Info($"Issuing cancel ({reason}); capture status is {status}");
+                    driver.CancelCapture(_camera.Handle);
+                    return true;
+                } catch (Exception ex) {
+                    Logger.Error($"CancelCapture failed ({reason})", ex);
+                    return false;
+                }
+            }
         }
 
         #endregion
@@ -525,7 +559,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
 
                 // Tell the camera to cancel capture, we do this every time regardless - this will reset the status to be non-complete
-                driver.CancelCapture(_camera.Handle);
+                TryCancelCapture("start exposure reset");
 
                 double exposureTime = sequence.ExposureTime;
                 driver.StartCapture(_camera.Handle, (float)exposureTime); //);
@@ -537,9 +571,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         public void AbortExposure() {
-            if (_camera != null) {
-                SonyDriver.GetInstance().CancelCapture(_camera.Handle);
-            }
+            TryCancelCapture("abort request");
         }
 
         public async Task WaitUntilExposureIsReady(CancellationToken token) {
