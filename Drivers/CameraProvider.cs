@@ -2,6 +2,7 @@
 using NINA.Equipment.Interfaces.ViewModel;
 using NINA.Equipment.Interfaces;
 using NINA.Profile.Interfaces;
+using NINA.Profile;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,6 +10,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.ComponentModel.Composition;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using NINA.Image.Interfaces;
 using NINA.WPF.Base.Mediator;
 using Sony;
@@ -24,11 +27,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private IProfileService profileService;
         private IExposureDataFactory exposureDataFactory;
         SonyDriver driver;
+        private readonly PluginOptionsAccessor pluginSettings;
+        private static readonly Guid PluginGuid =
+            Guid.Parse(((GuidAttribute)Attribute.GetCustomAttribute(typeof(CameraProvider).Assembly, typeof(GuidAttribute))).Value);
 
         [ImportingConstructor]
         public CameraProvider(IProfileService profileService, IExposureDataFactory exposureDataFactory) {
             this.profileService = profileService;
             this.exposureDataFactory = exposureDataFactory;
+            this.pluginSettings = new PluginOptionsAccessor(profileService, PluginGuid);
 
             if (!DllLoader.IsX86()) {
                 try {
@@ -43,6 +50,13 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public IList<ICamera> GetEquipment() {
             var devices = new List<ICamera>();
+            bool enableNativeCancel = false;
+            try {
+                var raw = pluginSettings.GetValueString("EnableNativeCancel", bool.FalseString);
+                enableNativeCancel = bool.TryParse(raw, out var parsed) && parsed;
+            } catch (Exception ex) {
+                Logger.Warning($"Unable to read EnableNativeCancel setting; defaulting to false. {ex.Message}");
+            }
 
             if (this.driver != null) {
                 try {
@@ -50,7 +64,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
                     foreach (var sonyDevice in driver.Cameras()) {
                         count++;
-                        devices.Add(new CameraDriver(profileService, exposureDataFactory, sonyDevice));
+                        devices.Add(new CameraDriver(profileService, exposureDataFactory, sonyDevice, enableNativeCancel));
                     }
 
                     Logger.Info($"Found {count} Sony Cameras");

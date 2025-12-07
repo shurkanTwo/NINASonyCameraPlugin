@@ -6,15 +6,10 @@
     <!--  In order for this datatemplate to be picked correctly, the key has to follow the naming convention of <IPlugin.Name>_Options -->
     <!--  Furthermore the Resource Dictionary has to be exported via code behind export attributes  -->
     <DataTemplate x:Key="Sony Camera Plugin_Options">
-        <!--        <StackPanel Orientation="Vertical"> -->
-    <!--            <StackPanel Orientation="Horizontal"> -->
-    <!--                <TextBlock Text="Default Notification Message" /> -->
-    <!--                <TextBox MinWidth="50" Text="{Binding DefaultNotificationMessage}" /> -->
-    <!--            </StackPanel> -->
-    <!--            <StackPanel Orientation="Horizontal"> -->
-    <!--                <TextBlock Text="Profile Specific Notification Message" /> -->
-    <!--                <TextBox MinWidth="50" Text="{Binding ProfileSpecificNotificationMessage}" /> -->
-    <!--            </StackPanel> -->
-    <!--        </StackPanel> -->
+        <StackPanel Orientation="Vertical" Margin="0,4,0,0">
+            <CheckBox Content="Enable native cancel (may crash on some bodies)"
+                      IsChecked="{Binding EnableNativeCancel, Mode=TwoWay}"
+                      ToolTip="When enabled, the driver will call the camera's native CancelCapture. On some bodies this can cause VCRUNTIME crashes." />
+        </StackPanel>
     </DataTemplate>
 </ResourceDictionary>

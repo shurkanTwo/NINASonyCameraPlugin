@@ -38,7 +38,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private const uint CAPTURE_STARTING   = 0x8001;
         private const uint CAPTURE_READING    = 0x8002;
         private const uint CAPTURE_PROCESSING = 0x8003;
-        private const bool ENABLE_NATIVE_CANCEL = false; // native CancelCapture is unstable on some bodies
+        private readonly bool _enableNativeCancel;
 
         private SonyCameraInfo _camera = null;
         private SonyDevice _device = null;
@@ -50,10 +50,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private AsyncObservableCollection<BinningMode> _binningModes;
         private readonly object _captureLock = new object();
 
-        public CameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, SonyDevice device) {
+        public CameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, SonyDevice device, bool enableNativeCancel) {
             _profileService = profileService;
             _exposureDataFactory = exposureDataFactory;
             _device = device;
+            _enableNativeCancel = enableNativeCancel;
         }
 
         #region Internal Helpers
@@ -98,7 +99,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 return false;
             }
 
-            if (!ENABLE_NATIVE_CANCEL) {
+            if (!_enableNativeCancel) {
                 Logger.Info($"Native cancel disabled; skipping cancel ({reason})");
                 return false;
             }
@@ -590,7 +591,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         public void AbortExposure() {
-            Logger.Info("AbortExposure requested; native cancel disabled; letting capture finish.");
+            if (_enableNativeCancel) {
+                TryCancelCapture("abort request");
+            } else {
+                Logger.Info("AbortExposure requested; native cancel disabled; letting capture finish.");
+            }
         }
 
         public async Task WaitUntilExposureIsReady(CancellationToken token) {
