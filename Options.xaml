@@ -7,7 +7,10 @@
     <!--  Furthermore the Resource Dictionary has to be exported via code behind export attributes  -->
     <DataTemplate x:Key="Sony Camera Plugin_Options">
         <StackPanel Orientation="Vertical" Margin="0,4,0,0">
-            <CheckBox Content="Enable native cancel (may crash on some bodies)"
+            <TextBlock Text="Capture cancellation" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4" />
+            <TextBlock Text="Use the camera's native CancelCapture call during aborts. Disable if you see crashes on abort; enable if you need to force-stop exposures." TextWrapping="Wrap" Opacity="0.7" Margin="0,0,0,8"/>
+            <CheckBox Content="Enable native cancel"
+                      HorizontalAlignment="Left"
                       IsChecked="{Binding EnableNativeCancel, Mode=TwoWay}"
                       ToolTip="When enabled, the driver will call the camera's native CancelCapture. On some bodies this can cause VCRUNTIME crashes." />
         </StackPanel>
