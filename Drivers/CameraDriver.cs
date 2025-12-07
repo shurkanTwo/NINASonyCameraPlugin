@@ -39,6 +39,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private const uint CAPTURE_READING    = 0x8002;
         private const uint CAPTURE_PROCESSING = 0x8003;
         private readonly bool _enableNativeCancel;
+        private bool _softCancelRequested;
 
         private SonyCameraInfo _camera = null;
         private SonyDevice _device = null;
@@ -55,6 +56,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             _exposureDataFactory = exposureDataFactory;
             _device = device;
             _enableNativeCancel = enableNativeCancel;
+            _softCancelRequested = false;
         }
 
         #region Internal Helpers
@@ -566,6 +568,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 SonyDriver driver = SonyDriver.GetInstance();
                 bool shouldCancel = false;
                 lock (_captureLock) {
+                    _softCancelRequested = false;
                     if (!TryGetCaptureStatusLocked(driver, out var captureStatus, "start exposure preflight")) {
                         Logger.Warning("Starting exposure without capture status due to read failure.");
                     } else if (captureStatus == CAPTURE_CAPTURING || captureStatus == CAPTURE_PROCESSING || captureStatus == CAPTURE_STARTING ||
@@ -594,6 +597,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             if (_enableNativeCancel) {
                 TryCancelCapture("abort request");
             } else {
+                _softCancelRequested = true;
                 Logger.Info("AbortExposure requested; native cancel disabled; letting capture finish.");
             }
         }
@@ -616,9 +620,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
                     while (!completionStates.Contains(captureStatus)) {
                         await CoreUtil.Wait(TimeSpan.FromMilliseconds(100), token);
-                        if (token.IsCancellationRequested) {
-                            Logger.Info("WaitUntilExposureIsReady cancelled by token; exiting without native cancel.");
-                            return;
+                        if (!_enableNativeCancel && token.IsCancellationRequested) {
+                            _softCancelRequested = true;
                         }
 
                         lock (_captureLock) {
@@ -629,8 +632,13 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     }
 
                     Logger.Info($"Wait for image ready complete, completion state is {captureStatus}");
+                    if (_softCancelRequested || token.IsCancellationRequested) {
+                        _softCancelRequested = false;
+                        throw new TaskCanceledException("Exposure cancelled by user (soft cancel).");
+                    }
                 } catch (TaskCanceledException) {
                     Logger.Info("WaitUntilExposureIsReady cancelled by token; exiting without native cancel.");
+                    throw;
                 } catch (Exception ex) {
                     Logger.Error("WaitUntilExposureIsReady got exception", ex);
                     throw new SonyException("Problem while waiting for image to be ready (see log)");
