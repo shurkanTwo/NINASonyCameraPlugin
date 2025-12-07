@@ -100,12 +100,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             lock (_captureLock) {
                 try {
                     SonyDriver driver = SonyDriver.GetInstance();
-                    uint status;
-
-                    try {
-                        status = driver.GetCaptureStatus(_camera.Handle);
-                    } catch (Exception ex) {
-                        Logger.Warning($"Skipping cancel ({reason}) because capture status could not be read: {ex.Message}");
+                    if (!TryGetCaptureStatusLocked(driver, out var status, reason)) {
                         return false;
                     }
 
@@ -122,6 +117,17 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     Logger.Error($"CancelCapture failed ({reason})", ex);
                     return false;
                 }
+            }
+        }
+
+        private bool TryGetCaptureStatusLocked(SonyDriver driver, out uint status, string reason) {
+            try {
+                status = driver.GetCaptureStatus(_camera.Handle);
+                return true;
+            } catch (Exception ex) {
+                Logger.Warning($"Unable to get capture status ({reason}): {ex.Message}");
+                status = CAPTURE_FAILED;
+                return false;
             }
         }
 
@@ -551,18 +557,25 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         public void StartExposure(CaptureSequence sequence) {
             if (_camera != null) {
                 SonyDriver driver = SonyDriver.GetInstance();
-                uint captureStatus = driver.GetCaptureStatus(_camera.Handle);
-
-                if (captureStatus == CAPTURE_CAPTURING || captureStatus == CAPTURE_PROCESSING || captureStatus == CAPTURE_STARTING ||
-                    captureStatus == CAPTURE_READING || captureStatus == CAPTURE_PROCESSING) {
-                    Notification.ShowWarning("Another exposure still in progress. Cancelling it to start another.");
+                bool shouldCancel = false;
+                lock (_captureLock) {
+                    if (!TryGetCaptureStatusLocked(driver, out var captureStatus, "start exposure preflight")) {
+                        Logger.Warning("Starting exposure without capture status due to read failure.");
+                    } else if (captureStatus == CAPTURE_CAPTURING || captureStatus == CAPTURE_PROCESSING || captureStatus == CAPTURE_STARTING ||
+                        captureStatus == CAPTURE_READING || captureStatus == CAPTURE_PROCESSING) {
+                        Notification.ShowWarning("Another exposure still in progress. Cancelling it to start another.");
+                        shouldCancel = true;
+                    }
                 }
 
-                // Tell the camera to cancel capture, we do this every time regardless - this will reset the status to be non-complete
-                TryCancelCapture("start exposure reset");
+                if (shouldCancel) {
+                    TryCancelCapture("start exposure reset");
+                }
 
-                double exposureTime = sequence.ExposureTime;
-                driver.StartCapture(_camera.Handle, (float)exposureTime); //);
+                lock (_captureLock) {
+                    double exposureTime = sequence.ExposureTime;
+                    driver.StartCapture(_camera.Handle, (float)exposureTime); //);
+                }
             }
         }
 
@@ -581,13 +594,22 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 SonyDriver driver = SonyDriver.GetInstance();
 
                 try {
-                    uint captureStatus = driver.GetCaptureStatus(_camera.Handle);
+                    uint captureStatus;
+                    lock (_captureLock) {
+                        if (!TryGetCaptureStatusLocked(driver, out captureStatus, "wait begin")) {
+                            throw new SonyException("Problem while waiting for image to be ready (status unavailable)");
+                        }
+                    }
                     Logger.Info(
                         $"Waiting for image to be ready, current state is {captureStatus}, completion states are {String.Join(", ", completionStates)}");
 
                     while (!completionStates.Contains(captureStatus)) {
                         await CoreUtil.Wait(TimeSpan.FromMilliseconds(100), token);
-                        captureStatus = driver.GetCaptureStatus(_camera.Handle);
+                        lock (_captureLock) {
+                            if (!TryGetCaptureStatusLocked(driver, out captureStatus, "wait poll")) {
+                                throw new SonyException("Problem while waiting for image to be ready (status unavailable)");
+                            }
+                        }
                     }
 
                     Logger.Info($"Wait for image ready complete, completion state is {captureStatus}");
