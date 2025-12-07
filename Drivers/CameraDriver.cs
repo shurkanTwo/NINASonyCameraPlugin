@@ -38,6 +38,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private const uint CAPTURE_STARTING   = 0x8001;
         private const uint CAPTURE_READING    = 0x8002;
         private const uint CAPTURE_PROCESSING = 0x8003;
+        private const bool ENABLE_NATIVE_CANCEL = false; // native CancelCapture is unstable on some bodies
 
         private SonyCameraInfo _camera = null;
         private SonyDevice _device = null;
@@ -94,6 +95,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         private bool TryCancelCapture(string reason) {
             if (_camera == null) {
+                return false;
+            }
+
+            if (!ENABLE_NATIVE_CANCEL) {
+                Logger.Info($"Native cancel disabled; skipping cancel ({reason})");
                 return false;
             }
 
@@ -584,7 +590,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         public void AbortExposure() {
-            TryCancelCapture("abort request");
+            Logger.Info("AbortExposure requested; native cancel disabled; letting capture finish.");
         }
 
         public async Task WaitUntilExposureIsReady(CancellationToken token) {
@@ -605,6 +611,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
                     while (!completionStates.Contains(captureStatus)) {
                         await CoreUtil.Wait(TimeSpan.FromMilliseconds(100), token);
+                        if (token.IsCancellationRequested) {
+                            Logger.Info("WaitUntilExposureIsReady cancelled by token; exiting without native cancel.");
+                            return;
+                        }
+
                         lock (_captureLock) {
                             if (!TryGetCaptureStatusLocked(driver, out captureStatus, "wait poll")) {
                                 throw new SonyException("Problem while waiting for image to be ready (status unavailable)");
@@ -613,6 +624,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     }
 
                     Logger.Info($"Wait for image ready complete, completion state is {captureStatus}");
+                } catch (TaskCanceledException) {
+                    Logger.Info("WaitUntilExposureIsReady cancelled by token; exiting without native cancel.");
                 } catch (Exception ex) {
                     Logger.Error("WaitUntilExposureIsReady got exception", ex);
                     throw new SonyException("Problem while waiting for image to be ready (see log)");
