@@ -571,10 +571,22 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     _softCancelRequested = false;
                     if (!TryGetCaptureStatusLocked(driver, out var captureStatus, "start exposure preflight")) {
                         Logger.Warning("Starting exposure without capture status due to read failure.");
-                    } else if (captureStatus == CAPTURE_CAPTURING || captureStatus == CAPTURE_PROCESSING || captureStatus == CAPTURE_STARTING ||
-                        captureStatus == CAPTURE_READING || captureStatus == CAPTURE_PROCESSING) {
-                        Notification.ShowWarning("Another exposure still in progress. Cancelling it to start another.");
-                        shouldCancel = true;
+                    } else {
+                        uint[] idleStates = { CAPTURE_CREATED, CAPTURE_CANCELLED, CAPTURE_COMPLETE, CAPTURE_FAILED };
+                        uint[] busyStates = { CAPTURE_CAPTURING, CAPTURE_PROCESSING, CAPTURE_STARTING, CAPTURE_READING };
+
+                        if (busyStates.Contains(captureStatus)) {
+                            Notification.ShowWarning("Camera is still busy with a previous exposure. Skipping new start.");
+                            if (_enableNativeCancel) {
+                                shouldCancel = true;
+                            } else {
+                                // Do not attempt to start while camera is busy when native cancel is disabled
+                                return;
+                            }
+                        } else if (!idleStates.Contains(captureStatus)) {
+                            Logger.Warning($"Unexpected capture status {captureStatus} before start; skipping start.");
+                            return;
+                        }
                     }
                 }
 
