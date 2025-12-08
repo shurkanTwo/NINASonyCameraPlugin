@@ -47,7 +47,6 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private readonly PluginOptionsAccessor _pluginSettings;
         private readonly bool _enableNativeCancelDefault;
         private bool _softCancelRequested;
-        private bool _abortWarningShown;
 
         private SonyCameraInfo _camera = null;
         private SonyDevice _device = null;
@@ -66,7 +65,6 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             _pluginSettings = pluginSettings;
             _enableNativeCancelDefault = enableNativeCancel;
             _softCancelRequested = false;
-            _abortWarningShown = false;
         }
 
         #region Internal Helpers
@@ -610,7 +608,6 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 double exposureTime;
                 lock (_captureLock) {
                     _softCancelRequested = false;
-                    _abortWarningShown = false;
                     if (!TryGetCaptureStatus(driver, out var captureStatus, "start exposure preflight") ||
                         captureStatus == CAPTURE_STATUS_UNKNOWN) {
                         Logger.Warning("Cannot start exposure: capture status unavailable.");
@@ -651,10 +648,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
 
             _softCancelRequested = true;
-            if (!_abortWarningShown) {
-                Notification.ShowWarning("Abort requested; native cancel is disabled or the camera did not accept it. Exposure will continue until it finishes.");
-                _abortWarningShown = true;
-            }
+            Notification.ShowWarning("Abort requested; native cancel is disabled or the camera did not accept it. Exposure will continue until it finishes.");
             Logger.Info("AbortExposure requested; native cancel unavailable; letting capture finish.");
         }
 
