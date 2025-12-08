@@ -583,25 +583,21 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                         throw new TaskCanceledException("Cannot start exposure: capture status unavailable.");
                     }
 
+                    TryCancelCaptureIfEnabled("start exposure reset");
+                    if (_enableNativeCancel && (!TryGetCaptureStatus(driver, out captureStatus, "start exposure post-cancel") || captureStatus == CAPTURE_STATUS_UNKNOWN)) {
+                        Logger.Warning("Cannot start exposure: capture status unavailable after cancel.");
+                        throw new TaskCanceledException("Cannot start exposure: capture status unavailable after cancel.");
+                    }
+
                     if (BUSY_STATES.Contains(captureStatus)) {
-                        TryCancelCaptureIfEnabled("start exposure reset");
-                        if (_enableNativeCancel && (!TryGetCaptureStatus(driver, out captureStatus, "start exposure post-cancel") || captureStatus == CAPTURE_STATUS_UNKNOWN)) {
-                            Logger.Warning("Cannot start exposure: capture status unavailable after cancel.");
-                            throw new TaskCanceledException("Cannot start exposure: capture status unavailable after cancel.");
-                        }
-                        if (BUSY_STATES.Contains(captureStatus)) {
-                            Notification.ShowWarning("Camera is still busy with a previous exposure. Skipping new start.");
-                            throw new TaskCanceledException("Cannot start exposure: Camera is still busy with a previous exposure.");
-                        }
+                        Notification.ShowWarning("Camera is still busy with a previous exposure. Skipping new start.");
+                        throw new TaskCanceledException("Cannot start exposure: Camera is still busy with a previous exposure.");
                     }
 
                     if (!IDLE_STATES.Contains(captureStatus)) {
                         Logger.Warning($"Cannot start exposure: Camera in unexpected capture status ({captureStatus}).");
                         throw new TaskCanceledException($"Cannot start exposure: Camera in unexpected capture status ({captureStatus}).");
                     }
-
-                    // Reset capture state for bodies that require a pre-start cancel, but only when native cancel is enabled.
-                    TryCancelCaptureIfEnabled("start exposure pre-start reset");
 
                     double exposureTime = sequence.ExposureTime;
                     driver.StartCapture(_camera.Handle, (float)exposureTime);
@@ -639,11 +635,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                         $"Waiting for image to be ready, current state is {captureStatus}, completion states are {String.Join(", ", COMPLETION_STATES)}");
 
                     while (!COMPLETION_STATES.Contains(captureStatus)) {
-                        var waitToken = _enableNativeCancel ? token : CancellationToken.None;
-                        await CoreUtil.Wait(TimeSpan.FromMilliseconds(100), waitToken);
-                        if (!_enableNativeCancel && token.IsCancellationRequested) {
-                            _softCancelRequested = true;
-                        }
+                        await CoreUtil.Wait(TimeSpan.FromMilliseconds(100), token);
 
                         lock (_captureLock) {
                             if (!TryGetCaptureStatus(driver, out captureStatus, "wait poll") || captureStatus == CAPTURE_STATUS_UNKNOWN) {
