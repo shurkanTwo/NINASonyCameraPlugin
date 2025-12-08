@@ -10,8 +10,6 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.ComponentModel.Composition;
-using System.Reflection;
-using System.Runtime.InteropServices;
 using NINA.RetroKiwi.Plugin.SonyCamera;
 using NINA.Image.Interfaces;
 using NINA.WPF.Base.Mediator;
@@ -29,14 +27,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private IExposureDataFactory exposureDataFactory;
         SonyDriver driver;
         private readonly PluginOptionsAccessor pluginSettings;
-        private static readonly Guid PluginGuid =
-            Guid.Parse(((GuidAttribute)Attribute.GetCustomAttribute(typeof(CameraProvider).Assembly, typeof(GuidAttribute))).Value);
 
         [ImportingConstructor]
         public CameraProvider(IProfileService profileService, IExposureDataFactory exposureDataFactory) {
             this.profileService = profileService;
             this.exposureDataFactory = exposureDataFactory;
-            this.pluginSettings = new PluginOptionsAccessor(profileService, PluginGuid);
+            this.pluginSettings = new PluginOptionsAccessor(profileService, SonyCamera.PluginGuid);
 
             if (!DllLoader.IsX86()) {
                 try {
