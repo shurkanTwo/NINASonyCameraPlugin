@@ -111,7 +111,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers
             RaisePropertyChanged(nameof(Gains));
         }
 
-        private bool TryCancelCapture(string reason)
+        private bool TryCancelCaptureIfEnabled(string reason)
         {
             if (_camera == null)
             {
@@ -724,14 +724,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers
 
                     if (BUSY_STATES.Contains(captureStatus))
                     {
-                        if (_enableNativeCancel)
+                        bool attemptedCancel = TryCancelCaptureIfEnabled("start exposure reset");
+                        if (attemptedCancel && !TryGetCaptureStatusLocked(driver, out captureStatus, "start exposure post-cancel"))
                         {
-                            TryCancelCapture("start exposure reset");
-                            if (!TryGetCaptureStatusLocked(driver, out captureStatus, "start exposure post-cancel"))
-                            {
-                                Logger.Warning("Cannot start exposure: capture status unavailable after cancel.");
-                                throw new TaskCanceledException("Cannot start exposure: capture status unavailable after cancel.");
-                            }
+                            Logger.Warning("Cannot start exposure: capture status unavailable after cancel.");
+                            throw new TaskCanceledException("Cannot start exposure: capture status unavailable after cancel.");
                         }
                         if (BUSY_STATES.Contains(captureStatus))
                         {
@@ -772,19 +769,14 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers
 
         public void AbortExposure()
         {
-            if (_enableNativeCancel)
+            if (TryCancelCaptureIfEnabled("abort request"))
             {
-                if (!TryCancelCapture("abort request"))
-                {
-                    Notification.ShowWarning("Abort requested, but the camera did not accept native cancel; exposure will continue until it finishes.");
-                }
+                return;
             }
-            else
-            {
-                _softCancelRequested = true;
-                Notification.ShowWarning("Abort requested; native cancel is disabled. Exposure will continue until it finishes.");
-                Logger.Info("AbortExposure requested; native cancel disabled; letting capture finish.");
-            }
+
+            _softCancelRequested = true;
+            Notification.ShowWarning("Abort requested; native cancel is disabled or the camera did not accept it. Exposure will continue until it finishes.");
+            Logger.Info("AbortExposure requested; native cancel unavailable; letting capture finish.");
         }
 
         public async Task WaitUntilExposureIsReady(CancellationToken token)
