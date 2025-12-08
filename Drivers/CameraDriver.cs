@@ -774,7 +774,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers
         {
             if (_enableNativeCancel)
             {
-                TryCancelCapture("abort request");
+                if (!TryCancelCapture("abort request"))
+                {
+                    Notification.ShowWarning("Abort requested, but the camera did not accept native cancel; exposure will continue until it finishes.");
+                }
             }
             else
             {

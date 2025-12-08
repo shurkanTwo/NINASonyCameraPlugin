@@ -8,11 +8,10 @@
     <DataTemplate x:Key="Sony Camera Plugin_Options">
         <StackPanel Orientation="Vertical" Margin="0,4,0,0">
             <TextBlock Text="Camera native capture cancellation" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4" />
-            <TextBlock Text="Use the camera's native CancelCapture call during aborts. Disable if you see crashes on abort; enable if you need to force-stop exposures." TextWrapping="Wrap" Opacity="0.7" Margin="0,0,0,8"/>
+            <TextBlock Text="Use the camera's native CancelCapture call during aborts. Stability varies by camera model and Windows driver stack and can cause VCRUNTIME crashes. Disable if aborts crash NINA; enable if you need to force-stop exposures." TextWrapping="Wrap" Opacity="0.7" Margin="0,0,0,8"/>
             <CheckBox Content="Enable native cancel"
                       HorizontalAlignment="Left"
-                      IsChecked="{Binding EnableNativeCancel, Mode=TwoWay}"
-                      ToolTip="When enabled, the driver will call the camera's native CancelCapture. Native CancelCapture stability varies by camera model and Windows driver stack. It can cause VCRUNTIME crashes. Disable if aborts cause Nina crashes." />
+                      IsChecked="{Binding EnableNativeCancel, Mode=TwoWay}" />
         </StackPanel>
     </DataTemplate>
 </ResourceDictionary>
