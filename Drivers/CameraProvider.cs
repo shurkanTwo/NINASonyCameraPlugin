@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using System.ComponentModel.Composition;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using NINA.RetroKiwi.Plugin.SonyCamera;
 using NINA.Image.Interfaces;
 using NINA.WPF.Base.Mediator;
 using Sony;
@@ -52,7 +53,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             var devices = new List<ICamera>();
             bool enableNativeCancel = false;
             try {
-                var raw = pluginSettings.GetValueString(nameof(EnableNativeCancel), bool.FalseString);
+                var raw = pluginSettings.GetValueString(nameof(SonyCamera.EnableNativeCancel), bool.FalseString);
                 enableNativeCancel = bool.TryParse(raw, out var parsed) && parsed;
             } catch (Exception ex) {
                 Logger.Warning($"Unable to read EnableNativeCancel setting; defaulting to false. {ex.Message}");
