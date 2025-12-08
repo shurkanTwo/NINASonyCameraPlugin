@@ -569,6 +569,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             if (_camera != null) {
                 SonyDriver driver = SonyDriver.GetInstance();
                 lock (_captureLock) {
+                    bool issuedCancel = false;
                     _softCancelRequested = false;
                     if (!TryGetCaptureStatusLocked(driver, out var captureStatus, "start exposure preflight")) {
                         Logger.Warning("Cannot start exposure: capture status unavailable.");
@@ -577,15 +578,37 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
                     if (BUSY_STATES.Contains(captureStatus)) {
                         if (_enableNativeCancel) {
-                            TryCancelCapture("start exposure reset");
+                            try {
+                                Logger.Info($"Cancelling existing capture before starting new one; status {captureStatus}");
+                                driver.CancelCapture(_camera.Handle);
+                                issuedCancel = true;
+                                if (!TryGetCaptureStatusLocked(driver, out captureStatus, "start exposure post-cancel")) {
+                                    Logger.Warning("Cannot start exposure: capture status unavailable after cancel.");
+                                    throw new TaskCanceledException("Cannot start exposure: capture status unavailable after cancel.");
+                                }
+                            } catch (Exception ex) {
+                                Logger.Error("CancelCapture failed before start", ex);
+                            }
                         }
-                        Notification.ShowWarning("Camera is still busy with a previous exposure. Skipping new start.");
-                        throw new TaskCanceledException("Cannot start exposure: Camera is still busy with a previous exposure.");
+                        if (BUSY_STATES.Contains(captureStatus)) {
+                            Notification.ShowWarning("Camera is still busy with a previous exposure. Skipping new start.");
+                            throw new TaskCanceledException("Cannot start exposure: Camera is still busy with a previous exposure.");
+                        }
                     }
 
                     if (!IDLE_STATES.Contains(captureStatus)) {
                         Logger.Warning($"Cannot start exposure: Camera in unexpected capture status ({captureStatus}).");
                         throw new TaskCanceledException($"Cannot start exposure: Camera in unexpected capture status ({captureStatus}).");
+                    }
+
+                    // Reset capture state for bodies that require a pre-start cancel, but only when native cancel is enabled.
+                    if (_enableNativeCancel && !issuedCancel) {
+                        try {
+                            driver.CancelCapture(_camera.Handle);
+                            issuedCancel = true;
+                        } catch (Exception ex) {
+                            Logger.Warning($"Pre-start CancelCapture failed; continuing start. {ex.Message}");
+                        }
                     }
 
                     double exposureTime = sequence.ExposureTime;
@@ -624,7 +647,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                         $"Waiting for image to be ready, current state is {captureStatus}, completion states are {String.Join(", ", completionStates)}");
 
                     while (!completionStates.Contains(captureStatus)) {
-                        await CoreUtil.Wait(TimeSpan.FromMilliseconds(100), token);
+                        var waitToken = _enableNativeCancel ? token : CancellationToken.None;
+                        await CoreUtil.Wait(TimeSpan.FromMilliseconds(100), waitToken);
                         if (!_enableNativeCancel && token.IsCancellationRequested) {
                             _softCancelRequested = true;
                         }
