@@ -20,6 +20,7 @@ using NINA.Image.ImageData;
 using NINA.Image.Interfaces;
 using NINA.Profile;
 using NINA.Profile.Interfaces;
+using NINA.RetroKiwi.Plugin.SonyCamera;
 using Sony;
 
 namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
@@ -43,7 +44,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private static readonly uint[] BUSY_STATES = { CAPTURE_CAPTURING, CAPTURE_PROCESSING, CAPTURE_STARTING, CAPTURE_READING };
         private static readonly uint[] COMPLETION_STATES = { CAPTURE_CANCELLED, CAPTURE_COMPLETE, CAPTURE_FAILED };
 
-        private readonly bool _enableNativeCancel;
+        private readonly PluginOptionsAccessor _pluginSettings;
+        private readonly bool _enableNativeCancelDefault;
         private bool _softCancelRequested;
 
         private SonyCameraInfo _camera = null;
@@ -56,11 +58,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private AsyncObservableCollection<BinningMode> _binningModes;
         private readonly object _captureLock = new object();
 
-        public CameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, SonyDevice device, bool enableNativeCancel) {
+        public CameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, SonyDevice device, PluginOptionsAccessor pluginSettings, bool enableNativeCancel) {
             _profileService = profileService;
             _exposureDataFactory = exposureDataFactory;
             _device = device;
-            _enableNativeCancel = enableNativeCancel;
+            _pluginSettings = pluginSettings;
+            _enableNativeCancelDefault = enableNativeCancel;
             _softCancelRequested = false;
         }
 
@@ -101,12 +104,29 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             RaisePropertyChanged(nameof(Gains));
         }
 
+        private bool NativeCancelEnabled {
+            get {
+                if (_pluginSettings != null) {
+                    try {
+                        var raw = _pluginSettings.GetValueString(nameof(SonyCamera.EnableNativeCancel), _enableNativeCancelDefault.ToString());
+                        if (bool.TryParse(raw, out var enabled)) {
+                            return enabled;
+                        }
+                    } catch (Exception ex) {
+                        Logger.Warning($"Unable to read EnableNativeCancel setting; defaulting to {_enableNativeCancelDefault}. {ex.Message}");
+                    }
+                }
+
+                return _enableNativeCancelDefault;
+            }
+        }
+
         private bool TryCancelCaptureIfEnabled(string reason) {
             if (_camera == null) {
                 return false;
             }
 
-            if (!_enableNativeCancel) {
+            if (!NativeCancelEnabled) {
                 Logger.Info($"Native cancel disabled; skipping cancel ({reason})");
                 return false;
             }
@@ -584,7 +604,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     }
 
                     TryCancelCaptureIfEnabled("start exposure reset");
-                    if (_enableNativeCancel && (!TryGetCaptureStatus(driver, out captureStatus, "start exposure post-cancel") || captureStatus == CAPTURE_STATUS_UNKNOWN)) {
+                    if (NativeCancelEnabled && (!TryGetCaptureStatus(driver, out captureStatus, "start exposure post-cancel") || captureStatus == CAPTURE_STATUS_UNKNOWN)) {
                         Logger.Warning("Cannot start exposure: capture status unavailable after cancel.");
                         throw new TaskCanceledException("Cannot start exposure: capture status unavailable after cancel.");
                     }

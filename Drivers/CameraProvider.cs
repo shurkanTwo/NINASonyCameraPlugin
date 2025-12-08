@@ -47,21 +47,13 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public IList<ICamera> GetEquipment() {
             var devices = new List<ICamera>();
-            bool enableNativeCancel = false;
-            try {
-                var raw = pluginSettings.GetValueString(nameof(SonyCamera.EnableNativeCancel), bool.FalseString);
-                enableNativeCancel = bool.TryParse(raw, out var parsed) && parsed;
-            } catch (Exception ex) {
-                Logger.Warning($"Unable to read EnableNativeCancel setting; defaulting to false. {ex.Message}");
-            }
-
             if (this.driver != null) {
                 try {
                     int count = 0;
 
                     foreach (var sonyDevice in driver.Cameras()) {
                         count++;
-                        devices.Add(new CameraDriver(profileService, exposureDataFactory, sonyDevice, enableNativeCancel));
+                        devices.Add(new CameraDriver(profileService, exposureDataFactory, sonyDevice, pluginSettings, false));
                     }
 
                     Logger.Info($"Found {count} Sony Cameras");
