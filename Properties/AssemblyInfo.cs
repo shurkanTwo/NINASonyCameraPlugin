@@ -33,8 +33,6 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyMetadata("LicenseURL", "https://www.mozilla.org/en-US/MPL/2.0/")]
 // The repository where your pluggin is hosted
 [assembly: AssemblyMetadata("Repository", "https://github.com/dougforpres/NINASonyCameraPlugin")]
-// Note on native cancel: stability depends on camera model and Windows driver stack; leave disabled if aborts crash.
-[assembly: AssemblyMetadata("NativeCancelHint", "Native CancelCapture stability varies by camera model and Windows driver stack; disable if aborts crash.")]
 
 // The following attributes are optional for the official manifest meta data
 
