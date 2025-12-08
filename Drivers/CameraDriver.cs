@@ -38,6 +38,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private const uint CAPTURE_STARTING   = 0x8001;
         private const uint CAPTURE_READING    = 0x8002;
         private const uint CAPTURE_PROCESSING = 0x8003;
+        private const uint CAPTURE_STATUS_UNKNOWN = 0xFFFFFFFF;
         private static readonly uint[] IDLE_STATES = { CAPTURE_CREATED, CAPTURE_CANCELLED, CAPTURE_COMPLETE, CAPTURE_FAILED };
         private static readonly uint[] BUSY_STATES = { CAPTURE_CAPTURING, CAPTURE_PROCESSING, CAPTURE_STARTING, CAPTURE_READING };
         private static readonly uint[] COMPLETION_STATES = { CAPTURE_CANCELLED, CAPTURE_COMPLETE, CAPTURE_FAILED };
@@ -113,7 +114,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             lock (_captureLock) {
                 try {
                     SonyDriver driver = SonyDriver.GetInstance();
-                    if (!TryGetCaptureStatusLocked(driver, out var status, reason)) {
+                    if (!TryGetCaptureStatus(driver, out var status, reason)) {
+                        return false;
+                    }
+
+                    if (status == CAPTURE_STATUS_UNKNOWN) {
+                        Logger.Warning($"Skip cancel ({reason}); capture status is unknown (camera did not respond).");
                         return false;
                     }
 
@@ -132,13 +138,13 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        private bool TryGetCaptureStatusLocked(SonyDriver driver, out uint status, string reason) {
+        private bool TryGetCaptureStatus(SonyDriver driver, out uint status, string reason) {
             try {
                 status = driver.GetCaptureStatus(_camera.Handle);
                 return true;
             } catch (Exception ex) {
-                Logger.Warning($"Unable to get capture status ({reason}): {ex.Message}");
-                status = CAPTURE_FAILED;
+                Logger.Warning($"Unable to get capture status ({reason}); camera may not have responded: {ex.Message}");
+                status = CAPTURE_STATUS_UNKNOWN;
                 return false;
             }
         }
@@ -571,14 +577,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 SonyDriver driver = SonyDriver.GetInstance();
                 lock (_captureLock) {
                     _softCancelRequested = false;
-                    if (!TryGetCaptureStatusLocked(driver, out var captureStatus, "start exposure preflight")) {
+                    if (!TryGetCaptureStatus(driver, out var captureStatus, "start exposure preflight") ||
+                        captureStatus == CAPTURE_STATUS_UNKNOWN) {
                         Logger.Warning("Cannot start exposure: capture status unavailable.");
                         throw new TaskCanceledException("Cannot start exposure: capture status unavailable.");
                     }
 
                     if (BUSY_STATES.Contains(captureStatus)) {
                         TryCancelCaptureIfEnabled("start exposure reset");
-                        if (_enableNativeCancel && !TryGetCaptureStatusLocked(driver, out captureStatus, "start exposure post-cancel")) {
+                        if (_enableNativeCancel && (!TryGetCaptureStatus(driver, out captureStatus, "start exposure post-cancel") || captureStatus == CAPTURE_STATUS_UNKNOWN)) {
                             Logger.Warning("Cannot start exposure: capture status unavailable after cancel.");
                             throw new TaskCanceledException("Cannot start exposure: capture status unavailable after cancel.");
                         }
@@ -624,7 +631,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 try {
                     uint captureStatus;
                     lock (_captureLock) {
-                        if (!TryGetCaptureStatusLocked(driver, out captureStatus, "wait begin")) {
+                        if (!TryGetCaptureStatus(driver, out captureStatus, "wait begin") || captureStatus == CAPTURE_STATUS_UNKNOWN) {
                             throw new SonyException("Problem while waiting for image to be ready (status unavailable)");
                         }
                     }
@@ -639,7 +646,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                         }
 
                         lock (_captureLock) {
-                            if (!TryGetCaptureStatusLocked(driver, out captureStatus, "wait poll")) {
+                            if (!TryGetCaptureStatus(driver, out captureStatus, "wait poll") || captureStatus == CAPTURE_STATUS_UNKNOWN) {
                                 throw new SonyException("Problem while waiting for image to be ready (status unavailable)");
                             }
                         }
