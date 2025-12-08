@@ -8,8 +8,8 @@ using System.Runtime.InteropServices;
 
 // [MANDATORY] The assembly versioning
 //Should be incremented for each new release build of a plugin
-[assembly: AssemblyVersion("1.0.0.4")]
-[assembly: AssemblyFileVersion("1.0.0.4")]
+[assembly: AssemblyVersion("1.0.0.5")]
+[assembly: AssemblyFileVersion("1.0.0.5")]
 
 // [MANDATORY] The name of your plugin
 [assembly: AssemblyTitle("Sony Camera Plugin")]
@@ -33,6 +33,8 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyMetadata("LicenseURL", "https://www.mozilla.org/en-US/MPL/2.0/")]
 // The repository where your pluggin is hosted
 [assembly: AssemblyMetadata("Repository", "https://github.com/dougforpres/NINASonyCameraPlugin")]
+// Note on native cancel: stability depends on camera model and Windows driver stack; leave disabled if aborts crash.
+[assembly: AssemblyMetadata("NativeCancelHint", "Native CancelCapture stability varies by camera model and Windows driver stack; disable if aborts crash.")]
 
 // The following attributes are optional for the official manifest meta data
 
