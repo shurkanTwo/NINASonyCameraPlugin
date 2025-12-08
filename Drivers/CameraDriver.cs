@@ -38,6 +38,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private const uint CAPTURE_STARTING   = 0x8001;
         private const uint CAPTURE_READING    = 0x8002;
         private const uint CAPTURE_PROCESSING = 0x8003;
+        private static readonly uint[] IDLE_STATES = { CAPTURE_CREATED, CAPTURE_CANCELLED, CAPTURE_COMPLETE, CAPTURE_FAILED };
+        private static readonly uint[] BUSY_STATES = { CAPTURE_CAPTURING, CAPTURE_PROCESSING, CAPTURE_STARTING, CAPTURE_READING };
         private readonly bool _enableNativeCancel;
         private bool _softCancelRequested;
 
@@ -113,8 +115,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                         return false;
                     }
 
-                    uint[] cancellableStates = { CAPTURE_CAPTURING, CAPTURE_STARTING, CAPTURE_READING, CAPTURE_PROCESSING };
-                    if (!cancellableStates.Contains(status)) {
+                    if (!BUSY_STATES.Contains(status)) {
                         Logger.Debug($"Skip cancel ({reason}); capture status is {status}");
                         return false;
                     }
@@ -566,39 +567,27 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         public void StartExposure(CaptureSequence sequence) {
             if (_camera != null) {
                 SonyDriver driver = SonyDriver.GetInstance();
-                bool canStart = false;
-                bool requestCancel = false;
                 lock (_captureLock) {
                     _softCancelRequested = false;
                     if (!TryGetCaptureStatusLocked(driver, out var captureStatus, "start exposure preflight")) {
-                        Logger.Warning("Starting exposure without capture status due to read failure.");
+                        throw new SonyException("Cannot start exposure: capture status unavailable.");
                     } else {
-                        uint[] idleStates = { CAPTURE_CREATED, CAPTURE_CANCELLED, CAPTURE_COMPLETE, CAPTURE_FAILED };
-                        uint[] busyStates = { CAPTURE_CAPTURING, CAPTURE_PROCESSING, CAPTURE_STARTING, CAPTURE_READING };
+                        if (BUSY_STATES.Contains(captureStatus)) {
+                            if (_enableNativeCancel) {
+                                TryCancelCapture("start exposure reset");
+                            }
+                            throw new SonyException("Cannot start exposure: Camera is still busy with a previous exposure.");
+                        }
 
-                        if (busyStates.Contains(captureStatus)) {
-                            Notification.ShowWarning("Camera is still busy with a previous exposure. Skipping new start.");
-                            requestCancel = _enableNativeCancel;
-                        } else if (!idleStates.Contains(captureStatus)) {
-                            Logger.Warning($"Unexpected capture status {captureStatus} before start; skipping start.");
-                        } else {
-                            canStart = true;
+                        if (!IDLE_STATES.Contains(captureStatus)) {
+                            throw new SonyException($"Cannot start exposure: Camera in unexpected capture status ({captureStatus}).");
                         }
                     }
                 }
 
-                if (requestCancel) {
-                    TryCancelCapture("start exposure reset");
-                    return;
-                }
-
-                if (!canStart) {
-                    return;
-                }
-
                 lock (_captureLock) {
                     double exposureTime = sequence.ExposureTime;
-                    driver.StartCapture(_camera.Handle, (float)exposureTime); //);
+                    driver.StartCapture(_camera.Handle, (float)exposureTime);
                 }
             }
         }
