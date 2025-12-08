@@ -782,6 +782,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers
             else
             {
                 _softCancelRequested = true;
+                Notification.ShowWarning("Abort requested; native cancel is disabled. Exposure will continue until it finishes.");
                 Logger.Info("AbortExposure requested; native cancel disabled; letting capture finish.");
             }
         }
