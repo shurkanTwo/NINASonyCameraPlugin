@@ -52,7 +52,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             var devices = new List<ICamera>();
             bool enableNativeCancel = false;
             try {
-                var raw = pluginSettings.GetValueString("EnableNativeCancel", bool.FalseString);
+                var raw = pluginSettings.GetValueString(nameof(EnableNativeCancel), bool.FalseString);
                 enableNativeCancel = bool.TryParse(raw, out var parsed) && parsed;
             } catch (Exception ex) {
                 Logger.Warning($"Unable to read EnableNativeCancel setting; defaulting to false. {ex.Message}");

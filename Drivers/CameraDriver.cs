@@ -40,7 +40,6 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private const uint CAPTURE_PROCESSING = 0x8003;
         private static readonly uint[] IDLE_STATES = { CAPTURE_CREATED, CAPTURE_CANCELLED, CAPTURE_COMPLETE, CAPTURE_FAILED };
         private static readonly uint[] BUSY_STATES = { CAPTURE_CAPTURING, CAPTURE_PROCESSING, CAPTURE_STARTING, CAPTURE_READING };
-        private static readonly uint[] CANCELLABLE_STATES = BUSY_STATES;
         private readonly bool _enableNativeCancel;
         private bool _softCancelRequested;
 
@@ -116,7 +115,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                         return false;
                     }
 
-                    if (!CANCELLABLE_STATES.Contains(status)) {
+                    if (!BUSY_STATES.Contains(status)) {
                         Logger.Debug($"Skip cancel ({reason}); capture status is {status}");
                         return false;
                     }
