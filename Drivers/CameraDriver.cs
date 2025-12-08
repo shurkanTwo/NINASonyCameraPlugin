@@ -22,24 +22,27 @@ using NINA.Profile;
 using NINA.Profile.Interfaces;
 using Sony;
 
-namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
-    public class CameraDriver : BaseINPC, ICamera {
+namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers
+{
+    public class CameraDriver : BaseINPC, ICamera
+    {
         // Some camera settings we are interested in
         private const uint PROPID_BATTERY = 53784;
         private const uint PROPID_ISO = 0xD21E; // Actual ISO currently set
         private const uint PROPID_ISOS = 0xFFFE; // Registry-backed list of learnt ISOs (may be empty until learnt)
 
         // Capture Status
-        private const uint CAPTURE_CREATED    = 0x0000;
-        private const uint CAPTURE_CAPTURING  = 0x0001;
-        private const uint CAPTURE_FAILED     = 0x0002;
-        private const uint CAPTURE_CANCELLED  = 0x0003;
-        private const uint CAPTURE_COMPLETE   = 0x0004;
-        private const uint CAPTURE_STARTING   = 0x8001;
-        private const uint CAPTURE_READING    = 0x8002;
+        private const uint CAPTURE_CREATED = 0x0000;
+        private const uint CAPTURE_CAPTURING = 0x0001;
+        private const uint CAPTURE_FAILED = 0x0002;
+        private const uint CAPTURE_CANCELLED = 0x0003;
+        private const uint CAPTURE_COMPLETE = 0x0004;
+        private const uint CAPTURE_STARTING = 0x8001;
+        private const uint CAPTURE_READING = 0x8002;
         private const uint CAPTURE_PROCESSING = 0x8003;
         private static readonly uint[] IDLE_STATES = { CAPTURE_CREATED, CAPTURE_CANCELLED, CAPTURE_COMPLETE, CAPTURE_FAILED };
         private static readonly uint[] BUSY_STATES = { CAPTURE_CAPTURING, CAPTURE_PROCESSING, CAPTURE_STARTING, CAPTURE_READING };
+        private static readonly uint[] COMPLETION_STATES = { CAPTURE_CANCELLED, CAPTURE_COMPLETE, CAPTURE_FAILED };
         private readonly bool _enableNativeCancel;
         private bool _softCancelRequested;
 
@@ -53,7 +56,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private AsyncObservableCollection<BinningMode> _binningModes;
         private readonly object _captureLock = new object();
 
-        public CameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, SonyDevice device, bool enableNativeCancel) {
+        public CameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, SonyDevice device, bool enableNativeCancel)
+        {
             _profileService = profileService;
             _exposureDataFactory = exposureDataFactory;
             _device = device;
@@ -63,24 +67,32 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         #region Internal Helpers
 
-        private PropertyValue GetPropertyValue(uint id) {
+        private PropertyValue GetPropertyValue(uint id)
+        {
             return SonyDriver.GetInstance().GetProperty(_camera.Handle, id);
         }
 
-        private IReadOnlyList<PropertyValueOption> GetAvailableIsoOptions() {
-            if (_camera == null) {
+        private IReadOnlyList<PropertyValueOption> GetAvailableIsoOptions()
+        {
+            if (_camera == null)
+            {
                 return Array.Empty<PropertyValueOption>();
             }
 
             uint[] propertyCandidates = { PROPID_ISOS, PROPID_ISO };
 
-            foreach (var propertyId in propertyCandidates) {
-                try {
+            foreach (var propertyId in propertyCandidates)
+            {
+                try
+                {
                     var options = _camera.GetPropertyInfo(propertyId)?.Options()?.Where(o => o.Value <= 0x00FFFFFF).ToList();
-                    if (options != null && options.Count > 0) {
+                    if (options != null && options.Count > 0)
+                    {
                         return options;
                     }
-                } catch (Exception ex) {
+                }
+                catch (Exception ex)
+                {
                     Logger.Warning($"Unable to enumerate ISO options for property 0x{propertyId:X}: {ex.Message}");
                 }
             }
@@ -89,7 +101,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             return Array.Empty<PropertyValueOption>();
         }
 
-        private void NotifyGainPropertiesChanged() {
+        private void NotifyGainPropertiesChanged()
+        {
             RaisePropertyChanged(nameof(CanGetGain));
             RaisePropertyChanged(nameof(CanSetGain));
             RaisePropertyChanged(nameof(GainMin));
@@ -98,24 +111,31 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             RaisePropertyChanged(nameof(Gains));
         }
 
-        private bool TryCancelCapture(string reason) {
-            if (_camera == null) {
+        private bool TryCancelCapture(string reason)
+        {
+            if (_camera == null)
+            {
                 return false;
             }
 
-            if (!_enableNativeCancel) {
+            if (!_enableNativeCancel)
+            {
                 Logger.Info($"Native cancel disabled; skipping cancel ({reason})");
                 return false;
             }
 
-            lock (_captureLock) {
-                try {
+            lock (_captureLock)
+            {
+                try
+                {
                     SonyDriver driver = SonyDriver.GetInstance();
-                    if (!TryGetCaptureStatusLocked(driver, out var status, reason)) {
+                    if (!TryGetCaptureStatusLocked(driver, out var status, reason))
+                    {
                         return false;
                     }
 
-                    if (!BUSY_STATES.Contains(status)) {
+                    if (!BUSY_STATES.Contains(status))
+                    {
                         Logger.Debug($"Skip cancel ({reason}); capture status is {status}");
                         return false;
                     }
@@ -123,18 +143,24 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     Logger.Info($"Issuing cancel ({reason}); capture status is {status}");
                     driver.CancelCapture(_camera.Handle);
                     return true;
-                } catch (Exception ex) {
+                }
+                catch (Exception ex)
+                {
                     Logger.Error($"CancelCapture failed ({reason})", ex);
                     return false;
                 }
             }
         }
 
-        private bool TryGetCaptureStatusLocked(SonyDriver driver, out uint status, string reason) {
-            try {
+        private bool TryGetCaptureStatusLocked(SonyDriver driver, out uint status, string reason)
+        {
+            try
+            {
                 status = driver.GetCaptureStatus(_camera.Handle);
                 return true;
-            } catch (Exception ex) {
+            }
+            catch (Exception ex)
+            {
                 Logger.Warning($"Unable to get capture status ({reason}): {ex.Message}");
                 status = CAPTURE_FAILED;
                 return false;
@@ -150,7 +176,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // Although the driver supports camera temperature, it gets it from the ARW's
         // metadata after a photo is taken, because this code doesn't request processed
         // ARW, the temp cannot be determined.
-        public double Temperature {
+        public double Temperature
+        {
             get => double.NaN;
             /*{
 
@@ -167,11 +194,16 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         public short BinX { get => 1; set => throw new NotImplementedException(); }
         public short BinY { get => 1; set => throw new NotImplementedException(); }
 
-        public string SensorName {
-            get {
-                if (_camera != null) {
+        public string SensorName
+        {
+            get
+            {
+                if (_camera != null)
+                {
                     return _camera.SensorName;
-                } else {
+                }
+                else
+                {
                     return string.Empty;
                 }
             }
@@ -183,42 +215,61 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public short BayerOffsetY { get => 1; set => throw new NotImplementedException(); }
 
-        public int CameraXSize {
-            get {
-                if (_camera != null) {
+        public int CameraXSize
+        {
+            get
+            {
+                if (_camera != null)
+                {
                     return _camera.ImageSize.Width;
                 }
-                else {
+                else
+                {
                     return 0;
                 }
             }
         }
 
-        public int CameraYSize {
-            get {
-                if (_camera != null) {
+        public int CameraYSize
+        {
+            get
+            {
+                if (_camera != null)
+                {
                     return _camera.ImageSize.Height;
-                } else {
+                }
+                else
+                {
                     return 0;
                 }
             }
         }
 
-        public double ExposureMin {
-            get {
-                if (_camera != null) {
+        public double ExposureMin
+        {
+            get
+            {
+                if (_camera != null)
+                {
                     return _camera.ExposureMin;
-                } else {
+                }
+                else
+                {
                     return double.NaN;
                 }
             }
         }
 
-        public double ExposureMax {
-            get {
-                if (_camera != null) {
+        public double ExposureMax
+        {
+            get
+            {
+                if (_camera != null)
+                {
                     return _camera.ExposureMax;
-                } else {
+                }
+                else
+                {
                     return double.NaN;
                 }
             }
@@ -228,21 +279,31 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public short MaxBinY { get => 1; set => throw new NotImplementedException(); }
 
-        public double PixelSizeX {
-            get {
-                if (_camera != null) {
+        public double PixelSizeX
+        {
+            get
+            {
+                if (_camera != null)
+                {
                     return _camera.PixelWidth;
-                } else {
+                }
+                else
+                {
                     return double.NaN;
                 }
             }
         }
 
-        public double PixelSizeY {
-            get {
-                if (_camera != null) {
+        public double PixelSizeY
+        {
+            get
+            {
+                if (_camera != null)
+                {
                     return _camera.PixelHeight;
-                } else {
+                }
+                else
+                {
                     return double.NaN;
                 }
             }
@@ -252,19 +313,26 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public CameraStates CameraState => CameraStates.NoState; // TODO
 
-        public bool CanShowLiveView {
-            get {
-                if (_camera != null) {
+        public bool CanShowLiveView
+        {
+            get
+            {
+                if (_camera != null)
+                {
                     return _camera.SupportsPreview();
-                } else {
+                }
+                else
+                {
                     return false;
                 }
             }
         }
 
-        public bool LiveViewEnabled {
+        public bool LiveViewEnabled
+        {
             get => _liveViewEnabled;
-            set {
+            set
+            {
                 _liveViewEnabled = value;
                 RaisePropertyChanged();
             }
@@ -272,21 +340,31 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public bool HasBattery => true;
 
-        public int BatteryLevel {
-            get {
-                if (_camera != null) {
+        public int BatteryLevel
+        {
+            get
+            {
+                if (_camera != null)
+                {
                     return (int)GetPropertyValue(PROPID_BATTERY).Value;
-                } else {
+                }
+                else
+                {
                     return 0;
                 }
             }
         }
 
-        public int BitDepth {
-            get {
-                if (_camera != null) {
+        public int BitDepth
+        {
+            get
+            {
+                if (_camera != null)
+                {
                     return _camera.BitsPerPixel;
-                } else {
+                }
+                else
+                {
                     return 0;
                 }
             }
@@ -296,11 +374,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public bool CanSetGain => CanGetGain;
 
-        public int GainMax {
-            get {
+        public int GainMax
+        {
+            get
+            {
                 var isoOptions = GetAvailableIsoOptions();
-                if (!isoOptions.Any()) {
-                    if (_camera != null) {
+                if (!isoOptions.Any())
+                {
+                    if (_camera != null)
+                    {
                         Logger.Error("Problem getting gain max: camera did not report ISO options.");
                     }
                     return -1;
@@ -310,11 +392,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        public int GainMin {
-            get {
+        public int GainMin
+        {
+            get
+            {
                 var isoOptions = GetAvailableIsoOptions();
-                if (!isoOptions.Any()) {
-                    if (_camera != null) {
+                if (!isoOptions.Any())
+                {
+                    if (_camera != null)
+                    {
                         Logger.Error("Problem getting gain min: camera did not report ISO options.");
                     }
                     return -1;
@@ -324,42 +410,61 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        public int Gain {
-            get {
-                if (_camera != null) {
-                    try {
+        public int Gain
+        {
+            get
+            {
+                if (_camera != null)
+                {
+                    try
+                    {
                         PropertyValue value = GetPropertyValue(PROPID_ISO);
 
                         return (int)(value.Value == 0xffffff ? 0 : value.Value);
-                    } catch (Exception ex) {
+                    }
+                    catch (Exception ex)
+                    {
                         Logger.Error("Problem getting gain", ex);
                         return -1;
                     }
-                } else {
+                }
+                else
+                {
                     return -1;
                 }
             }
 
-            set {
-                if (_camera != null) {
-                    try {
+            set
+            {
+                if (_camera != null)
+                {
+                    try
+                    {
                         SonyDriver.GetInstance().SetProperty(_camera.Handle, PROPID_ISO, (uint)value);
                         RaisePropertyChanged(nameof(Gain));
-                    } catch (Exception ex) {
+                    }
+                    catch (Exception ex)
+                    {
                         Logger.Error($"Problem setting gain to {value}", ex);
                     }
                 }
             }
         }
 
-        public IList<int> Gains {
-            get {
+        public IList<int> Gains
+        {
+            get
+            {
                 List<int> gains = new List<int>();
 
-                foreach (var iso in GetAvailableIsoOptions()) {
-                    if (iso.Value == 0xffffff) {
+                foreach (var iso in GetAvailableIsoOptions())
+                {
+                    if (iso.Value == 0xffffff)
+                    {
                         gains.Add(0); // AUTO
-                    } else {
+                    }
+                    else
+                    {
                         gains.Add((int)iso.Value);
                     }
                 }
@@ -370,29 +475,38 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public string Id => "Sony";
 
-        public string Name {
+        public string Name
+        {
             get => _device.Model;
             set => throw new NotImplementedException();
         }
 
-        public string DisplayName {
+        public string DisplayName
+        {
             get => _device.Model;
             set => throw new NotImplementedException();
         }
 
         public string Category { get => "Sony"; }
 
-        public bool Connected {
-            get {
+        public bool Connected
+        {
+            get
+            {
                 return _camera != null;
             }
         }
 
-        public string Description {
-            get {
-                if (_camera != null) {
+        public string Description
+        {
+            get
+            {
+                if (_camera != null)
+                {
                     return _camera.GetDescription();
-                } else {
+                }
+                else
+                {
                     return _device.GetDescription();
                 }
             }
@@ -402,10 +516,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public string DriverVersion => string.Empty;
 
-        public double TemperatureSetPoint {
+        public double TemperatureSetPoint
+        {
             get => double.NaN;
 
-            set {
+            set
+            {
             }
         }
 
@@ -421,9 +537,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public int SubSampleHeight { get; set; }
 
-        public bool CoolerOn {
+        public bool CoolerOn
+        {
             get => false;
-            set {
+            set
+            {
             }
         }
 
@@ -431,9 +549,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public bool HasDewHeater => false;
 
-        public bool DewHeaterOn {
+        public bool DewHeaterOn
+        {
             get => false;
-            set {
+            set
+            {
             }
         }
 
@@ -459,30 +579,38 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public IList<string> ReadoutModes => new List<string> { "Default" };
 
-        public short ReadoutMode {
+        public short ReadoutMode
+        {
             get => 0;
             set { }
         }
 
-        public short ReadoutModeForSnapImages {
+        public short ReadoutModeForSnapImages
+        {
             get => _readoutModeForSnapImages;
-            set {
+            set
+            {
                 _readoutModeForSnapImages = value;
                 RaisePropertyChanged();
             }
         }
 
-        public short ReadoutModeForNormalImages {
+        public short ReadoutModeForNormalImages
+        {
             get => _readoutModeForNormalImages;
-            set {
+            set
+            {
                 _readoutModeForNormalImages = value;
                 RaisePropertyChanged();
             }
         }
 
-        public AsyncObservableCollection<BinningMode> BinningModes {
-            get {
-                if (_binningModes == null) {
+        public AsyncObservableCollection<BinningMode> BinningModes
+        {
+            get
+            {
+                if (_binningModes == null)
+                {
                     _binningModes = new AsyncObservableCollection<BinningMode>();
                     _binningModes.Add(new BinningMode(1, 1));
                 }
@@ -495,19 +623,26 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         #region Supported Methods
 
-        public void StartLiveView(CaptureSequence sequence) {
+        public void StartLiveView(CaptureSequence sequence)
+        {
             LiveViewEnabled = true;
         }
 
-        public void StopLiveView() {
+        public void StopLiveView()
+        {
             LiveViewEnabled = false;
         }
 
-        public Task<bool> Connect(CancellationToken token) {
-            return Task.Run<bool>(() => {
-                try {
+        public Task<bool> Connect(CancellationToken token)
+        {
+            return Task.Run<bool>(() =>
+            {
+                try
+                {
                     _camera = SonyDriver.GetInstance().OpenCamera(_device.Id);
-                } catch (Exception ex) {
+                }
+                catch (Exception ex)
+                {
                     Logger.Error(ex);
                     _camera = null;
                 }
@@ -517,11 +652,16 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             });
         }
 
-        public void Disconnect() {
-            if (_camera != null) {
-                try {
+        public void Disconnect()
+        {
+            if (_camera != null)
+            {
+                try
+                {
                     SonyDriver.GetInstance().CloseCamera(_camera.Handle);
-                } catch (Exception ex) {
+                }
+                catch (Exception ex)
+                {
                     Logger.Error(ex);
                 }
 
@@ -530,9 +670,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        public Task<IExposureData> DownloadLiveView(CancellationToken token) {
-            return Task.Run<IExposureData>(() => {
-                using (var memStream = new MemoryStream(SonyDriver.GetInstance().GetLiveView(_camera.Handle))) {
+        public Task<IExposureData> DownloadLiveView(CancellationToken token)
+        {
+            return Task.Run<IExposureData>(() =>
+            {
+                using (var memStream = new MemoryStream(SonyDriver.GetInstance().GetLiveView(_camera.Handle)))
+                {
                     memStream.Position = 0;
 
                     JpegBitmapDecoder decoder =
@@ -560,44 +703,58 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             });
         }
 
-        public void SetupDialog() {
+        public void SetupDialog()
+        {
             throw new NotImplementedException();
         }
 
-        public void StartExposure(CaptureSequence sequence) {
-            if (_camera != null) {
+        public void StartExposure(CaptureSequence sequence)
+        {
+            if (_camera != null)
+            {
                 SonyDriver driver = SonyDriver.GetInstance();
-                lock (_captureLock) {
+                lock (_captureLock)
+                {
                     _softCancelRequested = false;
-                    if (!TryGetCaptureStatusLocked(driver, out var captureStatus, "start exposure preflight")) {
+                    if (!TryGetCaptureStatusLocked(driver, out var captureStatus, "start exposure preflight"))
+                    {
                         Logger.Warning("Cannot start exposure: capture status unavailable.");
                         throw new TaskCanceledException("Cannot start exposure: capture status unavailable.");
                     }
 
-                    if (BUSY_STATES.Contains(captureStatus)) {
-                        if (_enableNativeCancel) {
+                    if (BUSY_STATES.Contains(captureStatus))
+                    {
+                        if (_enableNativeCancel)
+                        {
                             TryCancelCapture("start exposure reset");
-                            if (!TryGetCaptureStatusLocked(driver, out captureStatus, "start exposure post-cancel")) {
+                            if (!TryGetCaptureStatusLocked(driver, out captureStatus, "start exposure post-cancel"))
+                            {
                                 Logger.Warning("Cannot start exposure: capture status unavailable after cancel.");
                                 throw new TaskCanceledException("Cannot start exposure: capture status unavailable after cancel.");
                             }
                         }
-                        if (BUSY_STATES.Contains(captureStatus)) {
+                        if (BUSY_STATES.Contains(captureStatus))
+                        {
                             Notification.ShowWarning("Camera is still busy with a previous exposure. Skipping new start.");
                             throw new TaskCanceledException("Cannot start exposure: Camera is still busy with a previous exposure.");
                         }
                     }
 
-                    if (!IDLE_STATES.Contains(captureStatus)) {
+                    if (!IDLE_STATES.Contains(captureStatus))
+                    {
                         Logger.Warning($"Cannot start exposure: Camera in unexpected capture status ({captureStatus}).");
                         throw new TaskCanceledException($"Cannot start exposure: Camera in unexpected capture status ({captureStatus}).");
                     }
 
                     // Reset capture state for bodies that require a pre-start cancel, but only when native cancel is enabled.
-                    if (_enableNativeCancel) {
-                        try {
+                    if (_enableNativeCancel)
+                    {
+                        try
+                        {
                             driver.CancelCapture(_camera.Handle);
-                        } catch (Exception ex) {
+                        }
+                        catch (Exception ex)
+                        {
                             Logger.Warning($"Pre-start CancelCapture failed; continuing start. {ex.Message}");
                         }
                     }
@@ -608,66 +765,86 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        public void StopExposure() {
+        public void StopExposure()
+        {
             AbortExposure();
         }
 
-        public void AbortExposure() {
-            if (_enableNativeCancel) {
+        public void AbortExposure()
+        {
+            if (_enableNativeCancel)
+            {
                 TryCancelCapture("abort request");
-            } else {
+            }
+            else
+            {
                 _softCancelRequested = true;
                 Logger.Info("AbortExposure requested; native cancel disabled; letting capture finish.");
             }
         }
 
-        public async Task WaitUntilExposureIsReady(CancellationToken token) {
-            using (token.Register(AbortExposure)) {
-                uint[] completionStates = { CAPTURE_CANCELLED, CAPTURE_COMPLETE, CAPTURE_FAILED };
+        public async Task WaitUntilExposureIsReady(CancellationToken token)
+        {
+            using (token.Register(AbortExposure))
+            {
 
                 SonyDriver driver = SonyDriver.GetInstance();
 
-                try {
+                try
+                {
                     uint captureStatus;
-                    lock (_captureLock) {
-                        if (!TryGetCaptureStatusLocked(driver, out captureStatus, "wait begin")) {
+                    lock (_captureLock)
+                    {
+                        if (!TryGetCaptureStatusLocked(driver, out captureStatus, "wait begin"))
+                        {
                             throw new SonyException("Problem while waiting for image to be ready (status unavailable)");
                         }
                     }
                     Logger.Info(
-                        $"Waiting for image to be ready, current state is {captureStatus}, completion states are {String.Join(", ", completionStates)}");
+                        $"Waiting for image to be ready, current state is {captureStatus}, completion states are {String.Join(", ", COMPLETION_STATES)}");
 
-                    while (!completionStates.Contains(captureStatus)) {
+                    while (!COMPLETION_STATES.Contains(captureStatus))
+                    {
                         var waitToken = _enableNativeCancel ? token : CancellationToken.None;
                         await CoreUtil.Wait(TimeSpan.FromMilliseconds(100), waitToken);
-                        if (!_enableNativeCancel && token.IsCancellationRequested) {
+                        if (!_enableNativeCancel && token.IsCancellationRequested)
+                        {
                             _softCancelRequested = true;
                         }
 
-                        lock (_captureLock) {
-                            if (!TryGetCaptureStatusLocked(driver, out captureStatus, "wait poll")) {
+                        lock (_captureLock)
+                        {
+                            if (!TryGetCaptureStatusLocked(driver, out captureStatus, "wait poll"))
+                            {
                                 throw new SonyException("Problem while waiting for image to be ready (status unavailable)");
                             }
                         }
                     }
 
                     Logger.Info($"Wait for image ready complete, completion state is {captureStatus}");
-                    if (_softCancelRequested || token.IsCancellationRequested) {
+                    if (_softCancelRequested || token.IsCancellationRequested)
+                    {
                         _softCancelRequested = false;
                         throw new TaskCanceledException("Exposure cancelled by user (soft cancel).");
                     }
-                } catch (TaskCanceledException) {
+                }
+                catch (TaskCanceledException)
+                {
                     Logger.Info("WaitUntilExposureIsReady cancelled by token; exiting without native cancel.");
                     throw;
-                } catch (Exception ex) {
+                }
+                catch (Exception ex)
+                {
                     Logger.Error("WaitUntilExposureIsReady got exception", ex);
                     throw new SonyException("Problem while waiting for image to be ready (see log)");
                 }
             }
         }
 
-        public Task<IExposureData> DownloadExposure(CancellationToken token) {
-            return Task.Run<IExposureData>(() => {
+        public Task<IExposureData> DownloadExposure(CancellationToken token)
+        {
+            return Task.Run<IExposureData>(() =>
+            {
                 byte[] rawImageData = SonyDriver.GetInstance().GetLastImage();
 
                 var metaData = new ImageMetaData();
@@ -684,29 +861,36 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         #region Unsupported Methods
 
-        public string Action(string actionName, string actionParameters) {
+        public string Action(string actionName, string actionParameters)
+        {
             throw new NotImplementedException();
         }
 
 
-        public void SendCommandBlind(string command, bool raw = true) {
+        public void SendCommandBlind(string command, bool raw = true)
+        {
             throw new NotImplementedException();
         }
 
-        public bool SendCommandBool(string command, bool raw = true) {
+        public bool SendCommandBool(string command, bool raw = true)
+        {
             throw new NotImplementedException();
         }
 
-        public string SendCommandString(string command, bool raw = true) {
+        public string SendCommandString(string command, bool raw = true)
+        {
             throw new NotImplementedException();
         }
 
-        public void SetBinning(short x, short y) {
+        public void SetBinning(short x, short y)
+        {
             // Ignore
         }
-        
-        public void UpdateSubSampleArea() {
-            if (_camera == null) {
+
+        public void UpdateSubSampleArea()
+        {
+            if (_camera == null)
+            {
                 EnableSubSample = false;
                 SubSampleX = 0;
                 SubSampleY = 0;
@@ -715,7 +899,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 return;
             }
 
-            if (EnableSubSample && !CanSubSample) {
+            if (EnableSubSample && !CanSubSample)
+            {
                 Logger.Warning("Sub-sampling requested but not supported for Sony cameras. Falling back to full frame.");
                 EnableSubSample = false;
             }
