@@ -724,8 +724,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers
 
                     if (BUSY_STATES.Contains(captureStatus))
                     {
-                        bool attemptedCancel = TryCancelCaptureIfEnabled("start exposure reset");
-                        if (attemptedCancel && !TryGetCaptureStatusLocked(driver, out captureStatus, "start exposure post-cancel"))
+                        TryCancelCaptureIfEnabled("start exposure reset");
+                        if (_enableNativeCancel && !TryGetCaptureStatusLocked(driver, out captureStatus, "start exposure post-cancel"))
                         {
                             Logger.Warning("Cannot start exposure: capture status unavailable after cancel.");
                             throw new TaskCanceledException("Cannot start exposure: capture status unavailable after cancel.");
