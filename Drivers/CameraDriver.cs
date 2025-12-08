@@ -744,17 +744,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers
                     }
 
                     // Reset capture state for bodies that require a pre-start cancel, but only when native cancel is enabled.
-                    if (_enableNativeCancel)
-                    {
-                        try
-                        {
-                            driver.CancelCapture(_camera.Handle);
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.Warning($"Pre-start CancelCapture failed; continuing start. {ex.Message}");
-                        }
-                    }
+                    TryCancelCaptureIfEnabled("start exposure pre-start reset");
 
                     double exposureTime = sequence.ExposureTime;
                     driver.StartCapture(_camera.Handle, (float)exposureTime);
