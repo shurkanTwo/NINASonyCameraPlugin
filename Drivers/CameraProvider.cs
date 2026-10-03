@@ -10,7 +10,6 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.ComponentModel.Composition;
-using NINA.RetroKiwi.Plugin.SonyCamera;
 using NINA.Image.Interfaces;
 using NINA.WPF.Base.Mediator;
 using Sony;
@@ -53,7 +52,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
                     foreach (var sonyDevice in driver.Cameras()) {
                         count++;
-                        devices.Add(new CameraDriver(profileService, exposureDataFactory, sonyDevice, pluginSettings, false));
+                        devices.Add(new CameraDriver(profileService, exposureDataFactory, sonyDevice, pluginSettings));
                     }
 
                     Logger.Info($"Found {count} Sony Cameras");
