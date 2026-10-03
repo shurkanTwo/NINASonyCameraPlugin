@@ -24,7 +24,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
     public class CameraProvider : IEquipmentProvider<ICamera> {
         private IProfileService profileService;
         private IExposureDataFactory exposureDataFactory;
-        SonyDriver driver;
+        ISonyCameraBackend driver;
         private readonly PluginOptionsAccessor pluginSettings;
 
         [ImportingConstructor]
@@ -33,9 +33,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             this.exposureDataFactory = exposureDataFactory;
             this.pluginSettings = new PluginOptionsAccessor(profileService, SonyCamera.PluginGuid);
 
-            if (!DllLoader.IsX86()) {
+            if (SimulatedSonyCameraBackend.Enabled) {
+                this.driver = SimulatedSonyCameraBackend.FromEnvironment();
+            } else if (!DllLoader.IsX86()) {
                 try {
-                    this.driver = SonyDriver.GetInstance();
+                    this.driver = new NativeSonyCameraBackend();
                 } catch (Exception ex) {
                     Logger.Error(ex);
                 }
@@ -52,7 +54,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
                     foreach (var sonyDevice in driver.Cameras()) {
                         count++;
-                        devices.Add(new CameraDriver(profileService, exposureDataFactory, sonyDevice, pluginSettings));
+                        devices.Add(new CameraDriver(profileService, exposureDataFactory, sonyDevice, pluginSettings, driver));
                     }
 
                     Logger.Info($"Found {count} Sony Cameras");

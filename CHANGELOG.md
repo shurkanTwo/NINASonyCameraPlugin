@@ -1,5 +1,10 @@
 # Sony Camera Plugin
 
+## Unreleased
+
+* Added an opt-in Sony Camera Simulator for development without the native driver or hardware.
+* Added automated tests of camera discovery, profile settings, image delivery, and cancellation through the actual plugin driver.
+
 ## 1.0.0.5
 
 * Added a profile-specific native cancel option, defaulted to off to avoid abort-related crashes.
