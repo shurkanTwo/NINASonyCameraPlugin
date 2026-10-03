@@ -33,6 +33,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private readonly ISonyCameraBackend _driver;
         private readonly Action<string> _showWarning;
         private readonly CaptureController _capture;
+        private readonly object connectionLock = new object();
 
         private SonyCameraInfo _camera = null;
         private SonyDevice _device = null;
@@ -494,20 +495,27 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public Task<bool> Connect(CancellationToken token) {
             return Task.Run<bool>(() => {
-                try {
-                    _camera = _driver.OpenCamera(_device.Id);
-                } catch (Exception ex) {
-                    Logger.Error(ex);
-                    _camera = null;
+                bool connected;
+                lock (connectionLock) {
+                    token.ThrowIfCancellationRequested();
+                    if (_camera != null) return true;
+                    try {
+                        _camera = _driver.OpenCamera(_device.Id);
+                    } catch (Exception ex) {
+                        Logger.Error(ex);
+                        _camera = null;
+                    }
+                    connected = _camera != null;
                 }
 
                 NotifyGainPropertiesChanged();
-                return _camera != null;
-            });
+                return connected;
+            }, token);
         }
 
         public void Disconnect() {
-            if (_camera != null) {
+            lock (connectionLock) {
+                if (_camera == null) return;
                 try {
                     _driver.CloseCamera(_camera.Handle);
                 } catch (Exception ex) {
@@ -515,8 +523,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
 
                 _camera = null;
-                NotifyGainPropertiesChanged();
             }
+            NotifyGainPropertiesChanged();
         }
 
         public Task<IExposureData> DownloadLiveView(CancellationToken token) {

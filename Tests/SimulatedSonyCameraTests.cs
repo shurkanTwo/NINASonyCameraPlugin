@@ -123,6 +123,28 @@ public class SimulatedSonyCameraTests {
     }
 
     [Fact]
+    public void CompletedCaptureCannotFailOrReturnToReadoutBeforeImageIsCollected() {
+        var clock = new ManualTimeProvider();
+        var camera = new SimulatedSonyCameraBackend(clock);
+        uint handle = camera.OpenCamera(SimulatedSonyCameraBackend.DeviceId).Handle;
+        camera.StartCapture(handle, 1);
+        clock.Advance(TimeSpan.FromSeconds(2));
+        // Cancellation observes Complete without consuming its image.
+        camera.CancelCapture(handle);
+        camera.FailCapture = true;
+        camera.ReadoutDelay = TimeSpan.FromSeconds(10);
+        Assert.Equal(4u, camera.GetCaptureStatus(handle));
+        Assert.Equal(1, camera.GetLastImage().Pixels[0]);
+        // Updated settings still apply to subsequent captures.
+        camera.StartCapture(handle, 1);
+        clock.Advance(TimeSpan.FromSeconds(2));
+        Assert.Equal(0x8002u, camera.GetCaptureStatus(handle));
+        clock.Advance(TimeSpan.FromSeconds(10));
+        Assert.Equal(2u, camera.GetCaptureStatus(handle));
+        Assert.Throws<InvalidOperationException>(() => camera.GetLastImage());
+    }
+
+    [Fact]
     public void ReconnectInvalidatesOldHandleAndDiscardsLastImage() {
         var clock = new ManualTimeProvider();
         var camera = new SimulatedSonyCameraBackend(clock);

@@ -4,6 +4,7 @@
 
 * Added an opt-in Sony Camera Simulator for development without the native driver or hardware.
 * Added automated tests of camera discovery, profile settings, image delivery, and cancellation through the actual plugin driver.
+* Preserved active camera connections when connect is called repeatedly or concurrently, and honored cancelled connection requests.
 
 ## 1.0.0.5
 

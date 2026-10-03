@@ -178,7 +178,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         private void UpdateCapture() {
-            if (!captureActive) return;
+            // Complete remains latched until GetCaptureStatus collects the image.
+            if (!captureActive || captureStatus == 4) return;
             var elapsed = clock.GetElapsedTime(startedAt);
             if (elapsed < TimeSpan.FromMilliseconds(20)) captureStatus = 0x8001;
             else if (elapsed < exposureDuration) captureStatus = 1;

@@ -64,6 +64,36 @@ public class CameraDriverSimulatorTests {
     }
 
     [Fact]
+    public async Task RepeatedAndConcurrentConnectsPreserveTheActiveCamera() {
+        using var test = new Fixture();
+        var connections = await Task.WhenAll(test.Driver.Connect(CancellationToken.None),
+            test.Driver.Connect(CancellationToken.None));
+        Assert.All(connections, connected => Assert.True(connected));
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        Assert.True(test.Driver.Connected);
+        test.Start();
+        test.Finish();
+        await test.Driver.WaitUntilExposureIsReady(CancellationToken.None);
+        await test.Driver.DownloadExposure(CancellationToken.None);
+        Assert.Equal(1, test.DownloadedPixels[0]);
+        test.Driver.Disconnect();
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CancelledConnectDoesNotOpenOrLoseAnExistingCamera() {
+        using var test = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => test.Driver.Connect(cancellation.Token));
+        Assert.False(test.Driver.Connected);
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => test.Driver.Connect(cancellation.Token));
+        Assert.True(test.Driver.Connected);
+        Assert.Equal(400, test.Driver.Gain);
+    }
+
+    [Fact]
     public async Task ActualDriverWaitsDownloadsAndCreatesNinaExposureData() {
         using var test = new Fixture();
         Assert.True(await test.Driver.Connect(CancellationToken.None));
