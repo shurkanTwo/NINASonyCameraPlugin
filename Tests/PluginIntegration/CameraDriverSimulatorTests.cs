@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Moq;
+using NINA.Core.Enum;
 using NINA.Equipment.Model;
 using NINA.Image.ImageData;
 using NINA.Image.Interfaces;
@@ -210,8 +211,10 @@ public class CameraDriverSimulatorTests {
         var backend = new Mock<ISonyCameraBackend>();
         backend.Setup(x => x.OpenCamera(It.IsAny<string>())).Returns(test.Backend.OpenCamera(SimulatedSonyCameraBackend.DeviceId));
         backend.Setup(x => x.GetLastImage()).Returns(new SonyExposureFrame { RawBytes = bytes });
-        var expected = new Mock<IExposureData>().Object;
-        test.ExposureFactory.SetReturnsDefault(expected);
+        var expected = new RAWExposureData(new Mock<IRawConverter>().Object, bytes, "arw", 14,
+            new ImageMetaData(), new Mock<IImageDataFactory>().Object);
+        test.ExposureFactory.Setup(x => x.CreateRAWExposureData(It.IsAny<RawConverterEnum>(),
+            It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<ImageMetaData>())).Returns(expected);
         var driver = new CameraDriver(test.Profile.Object, test.ExposureFactory.Object,
             test.Backend.Cameras().Single(), test.Options, backend.Object);
         try {
