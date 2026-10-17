@@ -77,6 +77,22 @@ dotnet test Tests/PluginIntegration/PluginIntegration.Tests.csproj --configurati
 
 The integration tests use the production camera driver, NINA profile settings, and NINA exposure objects with the simulated backend. A manual clock advances long exposures immediately. Both suites run in Windows CI; the portable suite also runs on Linux. On Linux, cross-compile with `dotnet build NINASonyCameraPlugin.csproj --configuration Release -p:EnableWindowsTargeting=true`.
 
+## Learning an unsupported lens
+
+The lens-learning tool is separate from the NINA plugin. The current Sony driver installer (1.0.1.21) includes `SonyCameraInfo.exe` and `SonyCameraInfo64.exe`, but not the lens-learning tool. `SonyCameraInfo64.exe /s` learns camera settings, not lens focus steps.
+
+The learning routine, `calcFocusRanges`, is in the native driver's [SonySettingsMonitor project](https://github.com/dougforpres/SonyCamera/blob/workerThread/SonySettingsMonitor/SonySettingsMonitor.cpp). To use it:
+
+1. Ask the maintainer at [retrodotkiwi@gmail.com](mailto:retrodotkiwi@gmail.com) for a lens-learning build of `SonySettingsMonitor.exe`. Include your camera model and lens manufacturer/model. An ordinary settings-monitor build does not start lens calibration; ask for one configured for learning.
+2. Install the [Sony driver](https://github.com/dougforpres/ASCOMSonyCameraDriver/releases), attach the lens, set focus to **MF**, and connect only the camera you want to use over USB in **PC Remote** mode. Close NINA and Imaging Edge Remote before running the tool.
+3. Open Command Prompt in the folder containing the supplied learning build and run:
+
+   ```bat
+   SonySettingsMonitor.exe
+   ```
+
+4. Follow the [Learning a new Lens guide](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Learning-a-new-Lens). Watch the focus indicator on the camera as you answer the tool's prompts. Send the maintainer the seven step-size/count pairs, along with the lens manufacturer, model, and name, so the lens profile can be added to the driver.
+
 ## Support
 
 - Best contact is email via the Homepage link or the ASCOM driver troubleshooting page footer.
@@ -84,6 +100,7 @@ The integration tests use the production camera driver, NINA profile settings, a
 - Help links:
   - My camera is not supported (https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Installation#if-you-dont-have-a-supported-camera-model);
   - Supported cameras (https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Supported-Cameras);
+  - Learning an unsupported lens: see the instructions above and the [lens-learning guide](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Learning-a-new-Lens);
   - Other known issues (https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Troubleshooting)
 
 ## Metadata
