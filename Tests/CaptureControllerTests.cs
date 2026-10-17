@@ -6,6 +6,42 @@ using Xunit;
 
 public class CaptureControllerTests {
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task AbortDuringPreflightPreventsStartAndSurvivesARejectedStart(bool nativeCancel, bool busy) {
+        var camera = new Camera { NativeCancelEnabled = nativeCancel };
+        if (busy) camera.Capture.Start(1);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        camera.ReadStatus = () => {
+            entered.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+            return busy ? 1u : 2u;
+        };
+        var start = Task.Factory.StartNew(() => Record.Exception(() => camera.Capture.Start(120)),
+            TaskCreationOptions.LongRunning);
+        try {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Equal(CaptureController.AbortResult.SoftCancelRequested, camera.Capture.Abort());
+        } finally {
+            release.Set();
+        }
+        var error = await start.WaitAsync(TimeSpan.FromSeconds(5));
+        if (busy) Assert.IsType<InvalidOperationException>(error);
+        else Assert.IsType<TaskCanceledException>(error);
+        Assert.Equal(busy ? 1 : 0, camera.Starts);
+        Assert.Equal(0, camera.Cancels);
+        camera.ReadStatus = null;
+        camera.Status = 4;
+        await Assert.ThrowsAsync<TaskCanceledException>(() => camera.Capture.WaitUntilReady(CancellationToken.None));
+        camera.Capture.Start(1);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+    }
+
+    [Theory]
     [InlineData(0x8002u)]
     [InlineData(0x8003u)]
     public void NativeAbortDoesNotCancelAnImageBeingReadOrProcessed(uint status) {
