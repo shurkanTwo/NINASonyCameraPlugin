@@ -11,7 +11,8 @@ namespace Sony {
         private const uint NotSupported = 50;
 
         private static bool IsNumeric(uint raw) => raw != uint.MaxValue && (raw >> 16) > 0 && (raw & 0xFFFF) > 0;
-        private static float Seconds(uint raw) => (float)(raw >> 16) / (raw & 0xFFFF);
+        private static float NativeRounded(float seconds) => MathF.Round(seconds * 100000f, MidpointRounding.AwayFromZero) / 100000f;
+        private static float Seconds(uint raw) => NativeRounded((float)(raw >> 16) / (raw & 0xFFFF));
 
         internal static uint? SelectShutter(double requested, IEnumerable<uint> shutterSpeeds) {
             if (!double.IsFinite(requested) || requested < 0 || requested > float.MaxValue) {
@@ -22,7 +23,7 @@ namespace Sony {
 
             // Match SetExposureTime's float arithmetic and five-decimal rounding.
             // Equal distances choose the shorter step in the descending ladder.
-            float target = MathF.Round((float)requested * 100000f, MidpointRounding.AwayFromZero) / 100000f;
+            float target = NativeRounded((float)requested);
             if (requested == 0 || target > Seconds(numeric[0])) return 0;
             uint nearest = numeric[0];
             float distance = MathF.Abs(target - Seconds(nearest));

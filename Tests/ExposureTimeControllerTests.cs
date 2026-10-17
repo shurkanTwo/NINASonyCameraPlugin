@@ -7,6 +7,13 @@ public class ExposureTimeControllerTests {
         0x00040005, 0x00030005, 0x00010002, 0x0001003C, 0x00010050, 0x00010064 };
 
     [Fact]
+    public void NativeSelectionAlsoRoundsLearnedStepsBeforeComparingDistances() {
+        uint[] halfStop = { 0, 0x001E0001, 0x000100B4, 0x000100FA };
+        Assert.Equal(0x000100FAu, ExposureTimeController.SelectShutter(0.00478f, halfStop));
+        Assert.True(ExposureTimeController.Apply(0.00478f, halfStop, () => 0, () => 0x000100FAu, timeoutMs: 0));
+    }
+
+    [Fact]
     public void BulbBoundaryUsesTheLearnedNumericShutterList() {
         uint[] learned = { 0, 0x00040001, 0x00010002 };
         Assert.True(ExposureTimeController.Apply(5, learned, () => 0, () => 0));
