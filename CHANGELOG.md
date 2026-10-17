@@ -1,4 +1,21 @@
-﻿# Sony Camera Plugin
+# Sony Camera Plugin
+
+## 1.0.0.5 — community preview
+
+First maintained release from [Lucas Lepski’s fork](https://github.com/shurkanTwo/NINASonyCameraPlugin), preserving Doug Henderson’s original authorship and MPL-2.0. Install manually using [INSTALLATION.md](INSTALLATION.md). This preview is not distributed through NINA’s plugin manager.
+
+- Integrate current capture start/abort coordination and an opt-in managed Sony camera simulator with full-plugin integration tests (Lucas Lepski, upstream #10/#15).
+- Report the latest downloaded ARW’s Sony camera temperature in NINA and that image’s metadata; missing readings remain unavailable (Lucas Lepski, #18 / issue #1).
+- Release native image and metadata allocations after copying, including error paths, avoiding a per-frame unmanaged memory leak (Robert Hasson, #14).
+- Retry and verify shutter changes for back-to-back exposures. A readable shutter mismatch now fails before capture rather than silently using the previous exposure. Exclude AUTO/Multi Frame NR from gain choices and fix native driver version comparisons (adapted from Robert Hasson’s #13 / issue #5).
+- Serialize native camera/lens calls with bounded waits. Execution timeout blocks further native access until NINA restarts. Keep native cancellation off by default and always soft-cancel during image readout/processing (adapted #13, preserving current #10 safeguards / issue #4).
+- Return focuser capability information without throwing (Christian Palm, #11), improve focuser state cleanup and notifications (Robert Hasson, #13).
+- Document lens-learning tools and camera SD-card saving (Lucas Lepski, #16/#17 / issues #9/#3).
+- Add Windows-tested manual-install ZIP/DLL packaging, checksums, source/build provenance, and installation/rollback instructions.
+
+Reviewed but deferred: experimental USB auto-reconnection, retrying a still-running timed-out native call, forced cancellation after repeated busy starts, and closed WIP #12 video intervals. Existing NINA 3.2/empty-ISO fixes from 1.0.0.4 (including @naixx’s contribution) remain included. See the [full review and issue coverage](docs/UPSTREAM-REVIEW-1.0.0.5.md).
+
+Validation uses automated tests and Windows CI. Physical camera/USB operation for this combined release has not been verified. Native access violations, newer camera support, and complete NINA Sky Flat behavior are not claimed fixed. Existing legacy-package NU1701 restore warnings remain.
 
 ## 1.0.0.4
 * Added the `UpdateSubSampleArea` implementation and bumped the minimum NINA version so the plugin loads in 3.2.

@@ -1,5 +1,9 @@
 # Sony Camera Plugin
 
+This is a **community-maintained fork** of [Doug Henderson’s Sony Camera Plugin](https://github.com/dougforpres/NINASonyCameraPlugin). Doug remains the original author. Lucas Lepski ([@shurkanTwo](https://github.com/shurkanTwo)) maintains these releases, incorporating contributions from the upstream community while we await a reply from Doug about shared maintenance.
+
+**[Download maintained releases](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases)** · **[Manual installation and rollback](INSTALLATION.md)** · **[Report a problem with this fork](https://github.com/shurkanTwo/NINASonyCameraPlugin/issues)**
+
 Native NINA plugin for Sony mirrorless/DSLR bodies over the Sony MTP interface, so you can control the camera directly from NINA without ASCOM.
 
 ## Features
@@ -7,7 +11,7 @@ Native NINA plugin for Sony mirrorless/DSLR bodies over the Sony MTP interface, 
 - Supports many Sony cameras (supported list: https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Supported-Cameras)
 - Connects Sony bodies and surfaces their model name in NINA
 - LiveView streaming (16-bit monochrome, where supported) plus normal captures saved as ARW through NINA's RAW converter so full metadata is preserved
-- Gain dropdown populated with actual ISO values (including Auto when present); ISO is controllable via the Gain property
+- Gain dropdown populated with supported manual ISO values; AUTO and Multi Frame NR values are excluded
 - Battery level reporting; exposes camera pixel size and resolution
 - Camera-controlled lenses exposed as a focuser inside NINA (supported lenses: https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Supported-Lenses)
 - Handles cameras that do not expose ISO options until they are "learned" in-camera
@@ -21,32 +25,111 @@ Native NINA plugin for Sony mirrorless/DSLR bodies over the Sony MTP interface, 
 
 ## Installation
 
-Install via the N.I.N.A. plugin manager or manually download and copy the DLL file into `%LOCALAPPDATA%\\NINA\\Plugins\\<Major>.<Minor>.<Hotfix>\\Sony Camera Plugin\\` from:
-https://github.com/dougforpres/NINASonyCameraPlugin/releases
+Download a maintained build from [this fork’s releases](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases) and follow the **[manual installation instructions](INSTALLATION.md)**. The first community release is a preview for manual testing. It replaces the upstream plugin; install one copy only.
+
+The N.I.N.A. plugin manager currently distributes the upstream release. This fork has not been submitted as its update source.
 
 ## Usage notes
 
 - ISO/gain list may be empty until the camera has learned ISO options; set an ISO on-camera once if needed.
-- Temperature is not reported (the plugin does not request processed ARW metadata).
+- Temperature shows the **camera temperature from the most recently downloaded ARW**, when Sony records a valid `CameraTemperature` maker note. It updates after each photo and is unavailable before the first photo, after reconnecting, or when the latest image lacks that reading. It is not a live sensor probe, a battery/ambient reading, or a cooling control. The same per-image reading is supplied to NINA's image metadata; the original ARW remains unchanged.
 - Binning and sub-sampling are not supported; captures use the full sensor frame.
-- For exposures <= 30s the driver chooses the nearest built-in shutter speed; longer exposures fall back to Bulb.
+- The driver chooses the nearest learnt built-in shutter speed; durations beyond the longest numeric speed use Bulb. The requested mode is verified before capture.
+- To keep a copy on the camera's memory card as well as sending it to NINA, use the camera's **PC Remote Settings → Still Img. Save Dest. → PC+Camera** setting (see below).
 - Powering off/unplugging the camera while connected can crash NINA via Windows' MTP stack (PortableDeviceApi.dll access violation); disconnect in NINA first to avoid it.
+- Native driver calls are serialized across camera and lens operations. If a native call stops responding, restart NINA and power-cycle the camera before reconnecting. Automatic USB reconnection is not included.
+- Shutter changes are read back and retried before capture. If a readable shutter remains outside supported-step rounding after the retry budget, capture fails instead of silently using the old exposure. Cameras without a learnt shutter list retain their manually selected shutter setting; learn that list before using automatic flats. Sky Flat behavior is not claimed to be resolved.
+- “Enable native cancel” is off by default and saved per NINA profile. With it off, abort cancels the wait and discards the exposure, while the camera finishes capturing; another exposure can start once the camera finishes. Enabling it allows native cancellation during aborts before image readout/processing, which may crash NINA on some camera models and Windows drivers. New exposure requests never cancel an existing capture.
+
+## Simulator development
+
+The plugin includes an opt-in **Sony Camera Simulator** that runs the actual Sony camera driver without SonyMTPCamera.dll or a physical camera. It generates distinct 320 × 240, 14-bit Bayer images and exposes ISO controls, exposure timing, readout, cancellation, and reconnect behavior.
+
+Launch NINA from PowerShell with simulator mode enabled:
+
+```powershell
+$env:NINA_SONY_SIMULATOR = "1"
+& "C:\Program Files\N.I.N.A. - Nighttime Imaging 'N' Astronomy\NINA.exe"
+```
+
+Adjust the executable path if your installation differs. Select **Sony Camera Simulator** in NINA's camera list. This mode replaces Sony camera discovery and skips Sony lens discovery, so the native DLL is not loaded. Close NINA and remove the environment variable to return to physical Sony equipment:
+
+```powershell
+Remove-Item Env:NINA_SONY_SIMULATOR -ErrorAction SilentlyContinue
+Remove-Item Env:NINA_SONY_SIMULATOR_SCENARIO -ErrorAction SilentlyContinue
+```
+
+Set `$env:NINA_SONY_SIMULATOR_SCENARIO` before launching NINA to exercise a failure scenario:
+
+| Value | Behavior |
+| --- | --- |
+| Unset | Normal exposure and readout. |
+| `slow-readout` | Ten seconds of readout after each exposure. |
+| `ignored-cancel` | Native cancel requests leave the capture running. |
+| `status-failure` | The first capture status read throws an error; later reads recover. |
+| `failed-capture` | Captures finish in the failed state without an image. |
+
+Synthetic frames use NINA's image-array path. This simulator does not exercise ARW decoding, LiveView, Sony USB/MTP communication, or native access violations.
+
+Run the portable capture and simulator tests with .NET 8:
+
+```sh
+dotnet test Tests/CaptureController.Tests.csproj --configuration Release
+```
+
+Run the actual plugin integration tests on Windows:
+
+```powershell
+dotnet test Tests/PluginIntegration/PluginIntegration.Tests.csproj --configuration Release
+```
+
+The integration tests use the production camera driver, NINA profile settings, and NINA exposure objects with the simulated backend. A manual clock advances long exposures immediately. All three suites, including `dotnet test Tests/Temperature/Temperature.Tests.csproj --configuration Release`, run in Windows CI; the portable suite also runs on Linux. On Linux, cross-compile with `dotnet build NINASonyCameraPlugin.csproj --configuration Release -p:EnableWindowsTargeting=true`.
+
+## Learning an unsupported lens
+
+The lens-learning tool is separate from the NINA plugin. The current Sony driver installer (1.0.1.21) includes `SonyCameraInfo.exe` and `SonyCameraInfo64.exe`, but not the lens-learning tool. `SonyCameraInfo64.exe /s` learns camera settings, not lens focus steps.
+
+The learning routine, `calcFocusRanges`, is in the native driver's [SonySettingsMonitor project](https://github.com/dougforpres/SonyCamera/blob/workerThread/SonySettingsMonitor/SonySettingsMonitor.cpp). To use it:
+
+1. Ask the maintainer at [retrodotkiwi@gmail.com](mailto:retrodotkiwi@gmail.com) for a lens-learning build of `SonySettingsMonitor.exe`. Include your camera model and lens manufacturer/model. An ordinary settings-monitor build does not start lens calibration; ask for one configured for learning.
+2. Install the [Sony driver](https://github.com/dougforpres/ASCOMSonyCameraDriver/releases), attach the lens, set focus to **MF**, and connect only the camera you want to use over USB in **PC Remote** mode. Close NINA and Imaging Edge Remote before running the tool.
+3. Open Command Prompt in the folder containing the supplied learning build and run:
+
+   ```bat
+   SonySettingsMonitor.exe
+   ```
+
+4. Follow the [Learning a new Lens guide](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Learning-a-new-Lens). Watch the focus indicator on the camera as you answer the tool's prompts. Send the maintainer the seven step-size/count pairs, along with the lens manufacturer, model, and name, so the lens profile can be added to the driver.
+
+## Keeping copies on the camera's memory card
+
+Saving to both NINA and the camera's memory card is controlled by the camera. Configure these settings before connecting the camera in NINA:
+
+1. Insert a writable memory card and open the camera's **PC Remote Settings**.
+2. Set **Still Img. Save Dest.** to **PC+Camera**. **PC Only** sends the image to the computer without retaining a copy on the card.
+3. If the camera offers **RAW+J PC Save Img**, choose **RAW** or **RAW & JPEG** so NINA receives the RAW image.
+
+Menu locations and labels vary by Sony model; consult your camera's manual if these options are elsewhere. For an example, see Sony's [Still Img. Save Dest. help page for the A7 III](https://helpguide.sony.net/ilc/1720/v1/en/contents/TP0001661953.html). The camera's choice controls the copy on the card, while NINA's image-saving settings control the copy on the computer.
 
 ## Support
 
-- Best contact is email via the Homepage link or the ASCOM driver troubleshooting page footer.
+- For this maintained fork, [open an issue here](https://github.com/shurkanTwo/NINASonyCameraPlugin/issues). Include the NINA version, plugin version, camera model, native Sony driver version, and relevant logs. Remove private paths and device identifiers before sharing logs.
+- Doug’s [original project](https://github.com/dougforpres/NINASonyCameraPlugin) and [homepage](https://retro.kiwi) remain linked for attribution and upstream driver information. Support for changes in this fork is handled here.
 - You may be asked for a driver log when reporting bugs: https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Troubleshooting#the-driver-dll-log
 - Help links:
   - My camera is not supported (https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Installation#if-you-dont-have-a-supported-camera-model);
   - Supported cameras (https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Supported-Cameras);
+  - Learning an unsupported lens: see the instructions above and the [lens-learning guide](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Learning-a-new-Lens);
   - Other known issues (https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Troubleshooting)
 
 ## Metadata
 
-- Version: 1.0.0.4
+- Version: 1.0.0.5
 - Author: Doug Henderson
-- Contributors: Lucas Lepski [@ShurkanTwo](https://github.com/shurkanTwo)
+- Maintainer of this fork: Lucas Lepski [@shurkanTwo](https://github.com/shurkanTwo)
+- Contributors include Robert Hasson [@totoantibes](https://github.com/totoantibes), Christian Palm [@christian-photo](https://github.com/christian-photo), and [@naixx](https://github.com/naixx); original commit authorship is preserved.
+- Review and release scope: [upstream work reviewed for 1.0.0.5](docs/UPSTREAM-REVIEW-1.0.0.5.md)
 - Minimum NINA version: 3.2.0.3001
 - License: MPL-2.0 (https://www.mozilla.org/en-US/MPL/2.0/)
-- Homepage: https://retro.kiwi
-- Changelog: https://github.com/dougforpres/NINASonyCameraPlugin/blob/master/CHANGELOG.md
+- Original author’s homepage: https://retro.kiwi
+- Changelog: https://github.com/shurkanTwo/NINASonyCameraPlugin/blob/master/CHANGELOG.md

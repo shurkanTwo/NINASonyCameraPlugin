@@ -1,46 +1,66 @@
-# This workflow will build a .NET project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-net
-
-name: Build Driver DLL
+name: Build and test Sony Camera Plugin
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [master]
   pull_request:
-    branches: [ "master" ]
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: windows-latest
-
+    timeout-minutes: 20
     steps:
-    - uses: actions/checkout@v3
-#    - name: Setup .NET
-#      uses: actions/setup-dotnet@v3
-#      with:
-#        dotnet-version: 4.8.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
 
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v1.1
+      - name: Test capture, simulator and native call policies
+        run: dotnet test Tests/CaptureController.Tests.csproj --configuration Release --logger "trx;LogFileName=capture.trx"
 
-    - name: Setup NuGet
-      uses: nuget/setup-nuget@v1.2.0
+      - name: Test Sony camera temperature metadata
+        run: dotnet test Tests/Temperature/Temperature.Tests.csproj --configuration Release --logger "trx;LogFileName=temperature.trx"
 
-    - name: Navigate to Workspace
-      run: cd $GITHUB_WORKSPACE
+      - name: Test plugin integration on Windows
+        run: dotnet test Tests/PluginIntegration/PluginIntegration.Tests.csproj --configuration Release --logger "trx;LogFileName=integration.trx"
 
-    - name: Create Build Directory
-      run: mkdir _build
+      - name: Build release plugin
+        run: dotnet build NINASonyCameraPlugin.sln --configuration Release -p:InstallPluginOnBuild=false
 
-    - name: Restore Packages
-      run: nuget restore NINASonyCameraPlugin.sln
-      
-    - name: Build
-      run: msbuild.exe NINASonyCameraPlugin.sln /nologo /nr:false /p:DeployOnBuild=true /p:DeployDefaultTarget=WebPublish /p:WebPublishMethod=FileSystem /p:DeleteExistingFiles=True /p:platform="Any CPU" /p:configuration="Release" /p:PublishUrl="../_build"
+      - name: Package manual installation release
+        shell: pwsh
+        run: |
+          $dll = Get-Item 'bin/Release/net8.0-windows10.0.17763.0/NINA.RetroKiwi.Plugin.SonyCamera.dll'
+          $version = $dll.VersionInfo.FileVersion
+          $package = New-Item -ItemType Directory -Path 'release-package'
+          $assets = New-Item -ItemType Directory -Path 'release-assets'
+          Copy-Item $dll.FullName $package.FullName
+          Copy-Item 'LICENSE.txt', 'INSTALLATION.md' $package.FullName
+          "Original author: Doug Henderson`nMaintained by: Lucas Lepski and contributors`nLicense: MPL-2.0`nSource: https://github.com/$env:GITHUB_REPOSITORY/tree/$env:GITHUB_SHA`nBuild: https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID`n" | Set-Content "$package/SOURCE.txt" -Encoding utf8
+          Compress-Archive -Path "$package/*" -DestinationPath "$assets/SonyCameraPlugin-$version.zip"
+          Copy-Item $dll.FullName $assets.FullName
+          $hashes = Get-ChildItem $assets.FullName -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          }
+          $hashes | Set-Content "$assets/SHA256SUMS.txt" -Encoding ascii
 
-    - name: Upload SonyCamera DLL
-      uses: actions/upload-artifact@v4
-      with:
-        name: SonyCamera-DLL
-        path: |
-          **/bin/Release/**/NINA.RetroKiwi.Plugin.SonyCamera.dll
+      - name: Upload verified release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SonyCamera-Release
+          path: release-assets/*
+          if-no-files-found: error
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SonyCamera-TestResults
+          path: Tests/**/TestResults/*.trx
+          if-no-files-found: warn
