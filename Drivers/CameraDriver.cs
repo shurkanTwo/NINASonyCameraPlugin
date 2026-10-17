@@ -36,6 +36,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private readonly object connectionLock = new object();
 
         private SonyCameraInfo _camera = null;
+        private double _lastCameraTemperature = double.NaN;
         private SonyDevice _device = null;
         private IProfileService _profileService;
         private readonly IExposureDataFactory _exposureDataFactory;
@@ -137,22 +138,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public bool HasShutter => true;
 
-        // Although the driver supports camera temperature, it gets it from the ARW's
-        // metadata after a photo is taken, because this code doesn't request processed
-        // ARW, the temp cannot be determined.
-        public double Temperature {
-            get => double.NaN;
-            /*{
-
-                if (_camera != null) {
-                    PropertyValue value = GetPropertyValue(PROPID_TEMPERATURE);
-
-                    return (value.Value) / 10.0;
-                } else {
-                    return double.NaN;
-                }
-            }*/
-        }
+        // Last downloaded ARW's camera reading; unavailable before the first
+        // photo or when the current image does not contain a valid reading.
+        public double Temperature => _camera == null ? double.NaN : Volatile.Read(ref _lastCameraTemperature);
 
         public short BinX { get => 1; set => throw new NotImplementedException(); }
         public short BinY { get => 1; set => throw new NotImplementedException(); }
@@ -499,6 +487,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 lock (connectionLock) {
                     token.ThrowIfCancellationRequested();
                     if (_camera != null) return true;
+                    Volatile.Write(ref _lastCameraTemperature, double.NaN);
                     try {
                         _camera = _driver.OpenCamera(_device.Id);
                     } catch (Exception ex) {
@@ -523,6 +512,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
 
                 _camera = null;
+                Volatile.Write(ref _lastCameraTemperature, double.NaN);
             }
             NotifyGainPropertiesChanged();
         }
@@ -606,6 +596,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 token.ThrowIfCancellationRequested();
                 SonyExposureFrame image = _driver.GetLastImage();
                 var metaData = new ImageMetaData();
+                double temperature = image.Pixels == null ? SonyCameraTemperature.Read(image.RawBytes) : double.NaN;
+                metaData.Camera.Temperature = temperature;
+                Volatile.Write(ref _lastCameraTemperature, temperature);
+                RaisePropertyChanged(nameof(Temperature));
                 if (image.Pixels != null) {
                     return _exposureDataFactory.CreateImageArrayExposureData(
                         input: image.Pixels,
@@ -622,7 +616,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     rawType: "arw",
                     bitDepth: this.BitDepth,
                     metaData: metaData);
-            });
+            }, token);
         }
         #endregion
 

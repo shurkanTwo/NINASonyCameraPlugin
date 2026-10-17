@@ -40,6 +40,9 @@ jobs:
 
     - name: Test plugin with simulated camera
       run: dotnet test Tests/PluginIntegration/PluginIntegration.Tests.csproj --configuration Release
+
+    - name: Test Sony camera temperature metadata
+      run: dotnet test Tests/Temperature/Temperature.Tests.csproj --configuration Release
       
     - name: Build
       run: msbuild.exe NINASonyCameraPlugin.sln /nologo /nr:false /p:DeployOnBuild=true /p:DeployDefaultTarget=WebPublish /p:WebPublishMethod=FileSystem /p:DeleteExistingFiles=True /p:platform="Any CPU" /p:configuration="Release" /p:PublishUrl="../_build"
