@@ -61,7 +61,7 @@ using System.Runtime.InteropServices;
 * Provides LiveView function if the camera supports it
 * Images are downloaded in Sony's native ARW format (this is a N.I.N.A feature) so full meta-data is available
 * ISO is controllable via Gain property
-* If the exposure time is 30 seconds or below the driver will select the nearest built-in exposure time, otherwise BULB mode will be used
+* The driver selects the nearest learnt shutter speed, or verified BULB mode for longer exposures
 
 ## Focuser
 * Support for over 15 different camera-mounted lenses. [See the list](https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Supported-Lenses)

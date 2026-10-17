@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using NINA.Core.Utility;
 using NINA.Core.Utility.Notification;
@@ -54,7 +55,10 @@ namespace Sony {
         });
 
         public SonyCameraInfo CameraInfo => calls.IsUnavailable ? null : _camera;
-        public bool IsOpen(uint handle) => !calls.IsUnavailable && _camera != null && _camera.Handle == handle;
+        public bool IsOpen(uint handle) {
+            SonyCameraInfo camera = _camera;
+            return !calls.IsUnavailable && camera != null && camera.Handle == handle;
+        }
 
         public SonyCameraInfo OpenCamera(string path) => Invoke("open camera", () => {
             if (_camera != null) throw new SonyException("A Sony camera is already open. Disconnect it before opening another camera; restart NINA if the earlier disconnect timed out.");
@@ -100,7 +104,9 @@ namespace Sony {
         public void StartCapture(uint handle, float exposureTime) {
             InvokeCamera(handle, "start capture", () => {
                 _sonydll.DiscardLastImage();
-                return _sonydll.StartCapture(handle, exposureTime);
+                double longestNonBulb = ExposureTimeController.LongestNonBulb(
+                    _camera.GetPropertyInfo(0xFFFF)?.Options()?.Select(option => option.Value));
+                return _sonydll.StartCapture(handle, exposureTime, longestNonBulb);
             }, timeoutMs: 60000);
         }
 

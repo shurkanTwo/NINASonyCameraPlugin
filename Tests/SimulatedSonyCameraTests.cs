@@ -41,6 +41,7 @@ public class SimulatedSonyCameraTests {
         Assert.Equal(4u, camera.GetCaptureStatus(handle));
         Assert.Equal(2u, camera.GetCaptureStatus(handle));
         var frame = camera.GetLastImage();
+        Assert.Throws<InvalidOperationException>(() => camera.GetLastImage());
         Assert.Equal(320 * 240, frame.Pixels.Length);
         Assert.Equal(1, frame.Pixels[0]);
         Assert.All(frame.Pixels, pixel => Assert.InRange(pixel, (ushort)0, (ushort)16383));

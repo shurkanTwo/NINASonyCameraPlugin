@@ -4,6 +4,21 @@ using Xunit;
 
 public class ExposureTimeControllerTests {
     [Fact]
+    public void BulbBoundaryUsesTheLearnedNumericShutterList() {
+        double longest = ExposureTimeController.LongestNonBulb(new uint[] { 0, 0x00040001, 0x00010002 });
+        Assert.Equal(4, longest);
+        Assert.True(ExposureTimeController.Apply(5, () => 0, () => 0, longestNonBulb: longest));
+        Assert.Throws<InvalidOperationException>(() => ExposureTimeController.Apply(
+            4.1, () => 0, () => 0x00040001, timeoutMs: 0, longestNonBulb: longest));
+    }
+
+    [Fact]
+    public void BulbRequestCannotAcceptAStaleNumericShutter() {
+        Assert.Throws<InvalidOperationException>(() => ExposureTimeController.Apply(
+            31, () => 0, () => 0x001E0001u, timeoutMs: 0));
+    }
+
+    [Fact]
     public void BackToBackShutterChangeIsRetriedUntilItTakes() {
         int attempts = 0;
         Assert.True(ExposureTimeController.Apply(0.5, () => { attempts++; return 0; },

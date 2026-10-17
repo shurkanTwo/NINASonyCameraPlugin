@@ -285,11 +285,11 @@ namespace Sony {
             }
         }
 
-        public UInt32 StartCapture(UInt32 hDevice, float exposureTime) {
+        public UInt32 StartCapture(UInt32 hDevice, float exposureTime, double longestNonBulb = 30) {
             PropertyValue value = new PropertyValue();
             bool applied = ExposureTimeController.Apply(exposureTime,
                 () => fSetExposureTime(hDevice, exposureTime, ref value),
-                () => GetSinglePropertyValue(hDevice, 0xD20D).Value);
+                () => GetSinglePropertyValue(hDevice, 0xD20D).Value, longestNonBulb: longestNonBulb);
             if (!applied) {
                 Logger.Warning("The camera has no learnt shutter-speed list. Its manually selected shutter speed will be used; run SonyCameraInfo to learn exposure settings before using the Flat Wizard.");
             }
@@ -333,13 +333,12 @@ namespace Sony {
 
                 // If the capture is complete, copy the image
                 if (info.Status == STATUS_COMPLETE) {
-                    _lastImage = new byte[info.ImageSize];
-
-                    if (_lastImage == null) {
-                        throw new SonyException("Unable to allocate memory for image");
+                    if (info.ImageData == IntPtr.Zero || info.ImageSize == 0 || info.ImageSize > int.MaxValue) {
+                        throw new SonyException("The completed Sony capture returned an invalid image buffer.");
                     }
-
-                    Marshal.Copy(info.ImageData, _lastImage, 0, (Int32)info.ImageSize);
+                    byte[] image = new byte[(int)info.ImageSize];
+                    Marshal.Copy(info.ImageData, image, 0, image.Length);
+                    Interlocked.Exchange(ref _lastImage, image);
                 }
 
                 return info.Status;

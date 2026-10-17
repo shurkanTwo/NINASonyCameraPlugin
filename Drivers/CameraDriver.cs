@@ -358,7 +358,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public bool Connected {
             get {
-                return _camera != null && _driver.IsOpen(_camera.Handle);
+                SonyCameraInfo camera = _camera;
+                return camera != null && _driver.IsOpen(camera.Handle);
             }
         }
 

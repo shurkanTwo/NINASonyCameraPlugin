@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 
@@ -8,12 +9,27 @@ namespace Sony {
     internal static class ExposureTimeController {
         private const uint NotSupported = 50;
 
+        internal static double LongestNonBulb(IEnumerable<uint> shutterSpeeds) {
+            double longest = 0;
+            if (shutterSpeeds != null) {
+                foreach (uint raw in shutterSpeeds) {
+                    uint numerator = raw >> 16;
+                    uint denominator = raw & 0xFFFF;
+                    if (raw != uint.MaxValue && numerator > 0 && denominator > 0) {
+                        longest = Math.Max(longest, (double)numerator / denominator);
+                    }
+                }
+            }
+            return longest > 0 ? longest : 30;
+        }
+
         internal static bool Apply(double requested, Func<uint> setExposure, Func<uint> readShutter,
-            int timeoutMs = 12000, Action pause = null) {
+            int timeoutMs = 12000, Action pause = null, double longestNonBulb = 30) {
             if (!double.IsFinite(requested) || requested < 0) throw new ArgumentOutOfRangeException(nameof(requested));
             pause ??= () => Thread.Sleep(300);
             Stopwatch elapsed = Stopwatch.StartNew();
             double actual = double.NaN;
+            bool requiresBulb = requested == 0 || requested > longestNonBulb;
             do {
                 uint result = setExposure();
                 if (result == NotSupported) return false;
@@ -22,7 +38,7 @@ namespace Sony {
                 uint raw = readShutter();
                 // Sony uses zero for Bulb. Zero-duration captures retain the
                 // native driver's existing Bulb behavior.
-                if (raw == 0 && (requested == 0 || requested > 30)) return true;
+                if (raw == 0 && requiresBulb) return true;
                 uint numerator = raw >> 16;
                 uint denominator = raw & 0xFFFF;
                 if (numerator == 0 || denominator == 0 || raw == uint.MaxValue) {
@@ -32,7 +48,7 @@ namespace Sony {
                 // Sony's irregular ladder includes a 4/3 gap. The native
                 // driver chooses by absolute distance: its worst half-step
                 // ratio is 7/6, below 1.17 and the smallest whole step (1.20).
-                if (requested > 0 && Math.Max(actual / requested, requested / actual) <= 1.17) return true;
+                if (!requiresBulb && requested > 0 && Math.Max(actual / requested, requested / actual) <= 1.17) return true;
                 if (elapsed.ElapsedMilliseconds >= timeoutMs) break;
                 pause();
             } while (elapsed.ElapsedMilliseconds < timeoutMs);

@@ -177,7 +177,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 if (!connected || lastImage == null) {
                     throw new InvalidOperationException("No completed simulated exposure is available.");
                 }
-                return lastImage;
+                SonyExposureFrame image = lastImage;
+                lastImage = null;
+                return image;
             }
         }
 
