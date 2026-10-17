@@ -1,28 +1,36 @@
 # Sony Camera Plugin
 
-## 1.0.0.6 — corrective community preview
+## 1.0.0.7 — metadata and documentation maintenance
 
-Follow-up to the 1.0.0.5 audit, retaining all previously integrated contributions and Doug Henderson's original authorship. Install manually using [INSTALLATION.md](INSTALLATION.md).
+- Use GitHub handles in plugin descriptions, author/contributor display metadata and the packaged source notice. Preserve the original copyright notice and commit authorship.
+- Correct README version, release status and installation links; retain the explicit limits of automated testing and manual distribution.
+- Keep the capture, native-call, focuser, temperature and simulator behavior from 1.0.0.6 unchanged. This release is a fresh versioned build; older release assets and checksums remain intact.
+
+See [the session review](docs/SESSION-REVIEW-1.0.0.7.md) and [manual installation/rollback](INSTALLATION.md). Physical camera/USB/MTP, LiveView, lens operation and complete Sky Flat behavior remain unverified. NINA's plugin manager still uses the upstream release source.
+
+## 1.0.0.6 — corrective community release
+
+Follow-up to the 1.0.0.5 audit, retaining all previously integrated contributions and @dougforpres's original authorship. Install manually using [INSTALLATION.md](INSTALLATION.md).
 
 - Preserve aborts received during capture-start preflight. An aborted pending start cannot launch an exposure after its status check returns; a rejected busy start preserves cancellation of the preceding capture.
 - Verify the specific nearest learnt shutter step using the native driver's float rounding and absolute-distance selection, replacing the broad ratio that accepted a stalled adjacent speed.
 - Retry a valid previous Bulb readback when switching to a short numeric exposure. Malformed readbacks still fail, and a persistent mismatch cannot start capture.
-- Restore the repeated-failure camera-loss protection adapted from Robert Hasson's upstream #13: three consecutive qualifying native errors mark the camera disconnected and block all further native access until NINA restarts. Never-working properties, explicit unsupported results, lock contention and shutter-verification mismatches do not count. A successful camera operation resets the count. No native close, retry or automatic reconnection is attempted after the guard trips.
+- Restore the repeated-failure camera-loss protection adapted from @totoantibes's upstream #13: three consecutive qualifying native errors mark the camera disconnected and block all further native access until NINA restarts. Never-working properties, explicit unsupported results, lock contention and shutter-verification mismatches do not count. A successful camera operation resets the count. No native close, retry or automatic reconnection is attempted after the guard trips.
 - Add regression coverage using the production capture controller and managed native wrappers, replacing only native delegates and NINA logging/notifications for portable tests.
 
-See [the corrective review](docs/RELEASE-REVIEW-1.0.0.6.md). Physical camera/USB operation remains unverified; this is a prerelease for manual testing and is not distributed through NINA's plugin manager.
+See [the corrective review](docs/RELEASE-REVIEW-1.0.0.6.md). Physical camera/USB operation remains unverified. This was published first as a preview and subsequently marked regular/Latest without changing the binaries; updates are installed manually.
 
 ## 1.0.0.5 — community preview
 
-First maintained release from [Lucas Lepski’s fork](https://github.com/shurkanTwo/NINASonyCameraPlugin), preserving Doug Henderson’s original authorship and MPL-2.0. Install manually using [INSTALLATION.md](INSTALLATION.md). This preview is not distributed through NINA’s plugin manager.
+First maintained release from [@shurkanTwo’s fork](https://github.com/shurkanTwo/NINASonyCameraPlugin), preserving @dougforpres’s original authorship and MPL-2.0. Install manually using [INSTALLATION.md](INSTALLATION.md). This preview is not distributed through NINA’s plugin manager.
 
-- Integrate current capture start/abort coordination and an opt-in managed Sony camera simulator with full-plugin integration tests (Lucas Lepski, upstream #10/#15).
-- Report the latest downloaded ARW’s Sony camera temperature in NINA and that image’s metadata; missing readings remain unavailable (Lucas Lepski, #18 / issue #1).
-- Release native image and metadata allocations after copying, including error paths, avoiding a per-frame unmanaged memory leak (Robert Hasson, #14).
-- Retry and verify shutter changes for back-to-back exposures. A readable shutter mismatch now fails before capture rather than silently using the previous exposure. Exclude AUTO/Multi Frame NR from gain choices and fix native driver version comparisons (adapted from Robert Hasson’s #13 / issue #5).
+- Integrate current capture start/abort coordination and an opt-in managed Sony camera simulator with full-plugin integration tests (@shurkanTwo, upstream #10/#15).
+- Report the latest downloaded ARW’s Sony camera temperature in NINA and that image’s metadata; missing readings remain unavailable (@shurkanTwo, #18 / issue #1).
+- Release native image and metadata allocations after copying, including error paths, avoiding a per-frame unmanaged memory leak (@totoantibes, #14).
+- Retry and verify shutter changes for back-to-back exposures. A readable shutter mismatch now fails before capture rather than silently using the previous exposure. Exclude AUTO/Multi Frame NR from gain choices and fix native driver version comparisons (adapted from @totoantibes’s #13 / issue #5).
 - Serialize native camera/lens calls with bounded waits. Execution timeout blocks further native access until NINA restarts. Keep native cancellation off by default and always soft-cancel during image readout/processing (adapted #13, preserving current #10 safeguards / issue #4).
-- Return focuser capability information without throwing (Christian Palm, #11), improve focuser state cleanup and notifications (Robert Hasson, #13).
-- Document lens-learning tools and camera SD-card saving (Lucas Lepski, #16/#17 / issues #9/#3).
+- Return focuser capability information without throwing (@christian-photo, #11), improve focuser state cleanup and notifications (@totoantibes, #13).
+- Document lens-learning tools and camera SD-card saving (@shurkanTwo, #16/#17 / issues #9/#3).
 - Add Windows-tested manual-install ZIP/DLL packaging, checksums, source/build provenance, and installation/rollback instructions.
 
 Reviewed but deferred: experimental USB auto-reconnection, retrying a still-running timed-out native call, forced cancellation after repeated busy starts, and closed WIP #12 video intervals. Existing NINA 3.2/empty-ISO fixes from 1.0.0.4 (including @naixx’s contribution) remain included. See the [full review and issue coverage](docs/UPSTREAM-REVIEW-1.0.0.5.md).
