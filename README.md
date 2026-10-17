@@ -1,5 +1,9 @@
 # Sony Camera Plugin
 
+This is a **community-maintained fork** of [Doug Henderson’s Sony Camera Plugin](https://github.com/dougforpres/NINASonyCameraPlugin). Doug remains the original author. Lucas Lepski ([@shurkanTwo](https://github.com/shurkanTwo)) maintains these releases, incorporating contributions from the upstream community while we await a reply from Doug about shared maintenance.
+
+**[Download maintained releases](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases)** · **[Manual installation and rollback](INSTALLATION.md)** · **[Report a problem with this fork](https://github.com/shurkanTwo/NINASonyCameraPlugin/issues)**
+
 Native NINA plugin for Sony mirrorless/DSLR bodies over the Sony MTP interface, so you can control the camera directly from NINA without ASCOM.
 
 ## Features
@@ -7,7 +11,7 @@ Native NINA plugin for Sony mirrorless/DSLR bodies over the Sony MTP interface, 
 - Supports many Sony cameras (supported list: https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Supported-Cameras)
 - Connects Sony bodies and surfaces their model name in NINA
 - LiveView streaming (16-bit monochrome, where supported) plus normal captures saved as ARW through NINA's RAW converter so full metadata is preserved
-- Gain dropdown populated with actual ISO values (including Auto when present); ISO is controllable via the Gain property
+- Gain dropdown populated with supported manual ISO values; AUTO and Multi Frame NR values are excluded
 - Battery level reporting; exposes camera pixel size and resolution
 - Camera-controlled lenses exposed as a focuser inside NINA (supported lenses: https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Supported-Lenses)
 - Handles cameras that do not expose ISO options until they are "learned" in-camera
@@ -21,8 +25,9 @@ Native NINA plugin for Sony mirrorless/DSLR bodies over the Sony MTP interface, 
 
 ## Installation
 
-Install via the N.I.N.A. plugin manager or manually download and copy the DLL file into `%LOCALAPPDATA%\\NINA\\Plugins\\<Major>.<Minor>.<Hotfix>\\Sony Camera Plugin\\` from:
-https://github.com/dougforpres/NINASonyCameraPlugin/releases
+Download a maintained build from [this fork’s releases](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases) and follow the **[manual installation instructions](INSTALLATION.md)**. The first community release is a preview for manual testing. It replaces the upstream plugin; install one copy only.
+
+The N.I.N.A. plugin manager currently distributes the upstream release. This fork has not been submitted as its update source.
 
 ## Usage notes
 
@@ -32,7 +37,9 @@ https://github.com/dougforpres/NINASonyCameraPlugin/releases
 - For exposures <= 30s the driver chooses the nearest built-in shutter speed; longer exposures fall back to Bulb.
 - To keep a copy on the camera's memory card as well as sending it to NINA, use the camera's **PC Remote Settings → Still Img. Save Dest. → PC+Camera** setting (see below).
 - Powering off/unplugging the camera while connected can crash NINA via Windows' MTP stack (PortableDeviceApi.dll access violation); disconnect in NINA first to avoid it.
-- “Enable native cancel” is off by default and saved per NINA profile. With it off, abort cancels the wait and discards the exposure, while the camera finishes capturing; another exposure can start once the camera finishes. Enabling it allows native cancellation during aborts, which may crash NINA on some camera models and Windows drivers. New exposure requests never cancel an existing capture.
+- Native driver calls are serialized across camera and lens operations. If a native call stops responding, restart NINA and power-cycle the camera before reconnecting. Automatic USB reconnection is not included.
+- Shutter changes are read back and retried before capture. If a readable shutter remains outside supported-step rounding after the retry budget, capture fails instead of silently using the old exposure. Cameras without a learnt shutter list retain their manually selected shutter setting; learn that list before using automatic flats. Sky Flat behavior is not claimed to be resolved.
+- “Enable native cancel” is off by default and saved per NINA profile. With it off, abort cancels the wait and discards the exposure, while the camera finishes capturing; another exposure can start once the camera finishes. Enabling it allows native cancellation during aborts before image readout/processing, which may crash NINA on some camera models and Windows drivers. New exposure requests never cancel an existing capture.
 
 ## Simulator development
 
@@ -76,7 +83,7 @@ Run the actual plugin integration tests on Windows:
 dotnet test Tests/PluginIntegration/PluginIntegration.Tests.csproj --configuration Release
 ```
 
-The integration tests use the production camera driver, NINA profile settings, and NINA exposure objects with the simulated backend. A manual clock advances long exposures immediately. Both suites run in Windows CI; the portable suite also runs on Linux. On Linux, cross-compile with `dotnet build NINASonyCameraPlugin.csproj --configuration Release -p:EnableWindowsTargeting=true`.
+The integration tests use the production camera driver, NINA profile settings, and NINA exposure objects with the simulated backend. A manual clock advances long exposures immediately. All three suites, including `dotnet test Tests/Temperature/Temperature.Tests.csproj --configuration Release`, run in Windows CI; the portable suite also runs on Linux. On Linux, cross-compile with `dotnet build NINASonyCameraPlugin.csproj --configuration Release -p:EnableWindowsTargeting=true`.
 
 ## Learning an unsupported lens
 
@@ -106,7 +113,8 @@ Menu locations and labels vary by Sony model; consult your camera's manual if th
 
 ## Support
 
-- Best contact is email via the Homepage link or the ASCOM driver troubleshooting page footer.
+- For this maintained fork, [open an issue here](https://github.com/shurkanTwo/NINASonyCameraPlugin/issues). Include the NINA version, plugin version, camera model, native Sony driver version, and relevant logs. Remove private paths and device identifiers before sharing logs.
+- Doug’s [original project](https://github.com/dougforpres/NINASonyCameraPlugin) and [homepage](https://retro.kiwi) remain linked for attribution and upstream driver information. Support for changes in this fork is handled here.
 - You may be asked for a driver log when reporting bugs: https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Troubleshooting#the-driver-dll-log
 - Help links:
   - My camera is not supported (https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Installation#if-you-dont-have-a-supported-camera-model);
@@ -118,8 +126,10 @@ Menu locations and labels vary by Sony model; consult your camera's manual if th
 
 - Version: 1.0.0.5
 - Author: Doug Henderson
-- Contributors: Lucas Lepski [@ShurkanTwo](https://github.com/shurkanTwo)
+- Maintainer of this fork: Lucas Lepski [@shurkanTwo](https://github.com/shurkanTwo)
+- Contributors include Robert Hasson [@totoantibes](https://github.com/totoantibes), Christian Palm [@christian-photo](https://github.com/christian-photo), and [@naixx](https://github.com/naixx); original commit authorship is preserved.
+- Review and release scope: [upstream work reviewed for 1.0.0.5](docs/UPSTREAM-REVIEW-1.0.0.5.md)
 - Minimum NINA version: 3.2.0.3001
 - License: MPL-2.0 (https://www.mozilla.org/en-US/MPL/2.0/)
-- Homepage: https://retro.kiwi
-- Changelog: https://github.com/dougforpres/NINASonyCameraPlugin/blob/master/CHANGELOG.md
+- Original author’s homepage: https://retro.kiwi
+- Changelog: https://github.com/shurkanTwo/NINASonyCameraPlugin/blob/master/CHANGELOG.md
