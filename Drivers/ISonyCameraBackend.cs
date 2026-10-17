@@ -6,6 +6,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         IEnumerable<SonyDevice> Cameras();
         SonyCameraInfo OpenCamera(string id);
         void CloseCamera(uint handle);
+        bool IsOpen(uint handle);
         PropertyValue GetProperty(uint handle, uint propertyId);
         void SetProperty(uint handle, uint propertyId, uint value);
         byte[] GetLiveView(uint handle);

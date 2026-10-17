@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -239,6 +240,7 @@ public class CameraDriverSimulatorTests {
         using var test = new Fixture();
         byte[] bytes = { 1, 2, 3, 4 };
         var backend = new Mock<ISonyCameraBackend>();
+        backend.Setup(x => x.IsOpen(It.IsAny<uint>())).Returns(true);
         backend.Setup(x => x.OpenCamera(It.IsAny<string>())).Returns(test.Backend.OpenCamera(SimulatedSonyCameraBackend.DeviceId));
         backend.Setup(x => x.GetLastImage()).Returns(new SonyExposureFrame { RawBytes = bytes });
         var expected = new RAWExposureData(new Mock<IRawConverter>().Object, bytes, "arw", 14,
@@ -256,6 +258,69 @@ public class CameraDriverSimulatorTests {
             Assert.Same(bytes, invocation.Arguments[Array.FindIndex(parameters, p => p.Name == "rawBytes")]);
             Assert.Equal("arw", invocation.Arguments[Array.FindIndex(parameters, p => p.Name == "rawType")]);
             Assert.Equal(14, invocation.Arguments[Array.FindIndex(parameters, p => p.Name == "bitDepth")]);
+        } finally {
+            driver.Disconnect();
+        }
+    }
+
+    [Fact]
+    public async Task ArwTemperatureReachesBothCameraAndImageAndClearsWhenUnavailable() {
+        using var test = new Fixture();
+        byte[] raw = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Fixtures", "a7iii-metadata.bin"));
+        var backend = new Mock<ISonyCameraBackend>();
+        backend.Setup(x => x.IsOpen(It.IsAny<uint>())).Returns(true);
+        backend.Setup(x => x.OpenCamera(It.IsAny<string>())).Returns(test.Backend.OpenCamera(SimulatedSonyCameraBackend.DeviceId));
+        backend.Setup(x => x.GetLastImage()).Returns(() => new SonyExposureFrame { RawBytes = raw });
+        ImageMetaData lastMetadata = null;
+        test.ExposureFactory.Setup(x => x.CreateRAWExposureData(It.IsAny<RawConverterEnum>(), It.IsAny<byte[]>(),
+            It.IsAny<string>(), It.IsAny<int>(), It.IsAny<ImageMetaData>()))
+            .Callback((RawConverterEnum converter, byte[] bytes, string type, int bits, ImageMetaData metadata) => lastMetadata = metadata);
+        var driver = new CameraDriver(test.Profile.Object, test.ExposureFactory.Object,
+            test.Backend.Cameras().Single(), test.Options, backend.Object);
+        try {
+            Assert.True(await driver.Connect(CancellationToken.None));
+            Assert.True(double.IsNaN(driver.Temperature));
+            await driver.DownloadExposure(CancellationToken.None);
+            Assert.Equal(28, driver.Temperature);
+            Assert.Equal(28, lastMetadata.Camera.Temperature);
+            Assert.True(await driver.Connect(CancellationToken.None));
+            Assert.Equal(28, driver.Temperature);
+            raw = new byte[] { 1, 2, 3 };
+            await driver.DownloadExposure(CancellationToken.None);
+            Assert.True(double.IsNaN(driver.Temperature));
+            Assert.True(double.IsNaN(lastMetadata.Camera.Temperature));
+            raw = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Fixtures", "a7iii-metadata.bin"));
+            await driver.DownloadExposure(CancellationToken.None);
+            driver.Disconnect();
+            Assert.True(double.IsNaN(driver.Temperature));
+            Assert.True(await driver.Connect(CancellationToken.None));
+            Assert.True(double.IsNaN(driver.Temperature));
+        } finally {
+            driver.Disconnect();
+        }
+    }
+
+    [Fact]
+    public async Task GainListFiltersAutoAndMultiFrameValuesAndSortsManualIsos() {
+        using var test = new Fixture();
+        var options = new System.Collections.Generic.List<Sony.PropertyValueOption>();
+        foreach (uint value in new uint[] { 0x00FFFFFF, 800, 100, 0x01000064, 0, 200, 100 }) {
+            options.Add(new Sony.PropertyValueOption { Value = value, Name = value.ToString() });
+        }
+        var camera = new Sony.SonyCameraInfo(1, new Sony.DeviceInfo(), new Sony.CameraInfo(),
+            new System.Collections.Generic.List<Sony.PropertyInfo> {
+                new Sony.PropertyInfo(new Sony.PropertyDescriptor { Id = 0xFFFE, ValueCount = (uint)options.Count }, options)
+            });
+        var backend = new Mock<ISonyCameraBackend>();
+        backend.Setup(x => x.IsOpen(It.IsAny<uint>())).Returns(true);
+        backend.Setup(x => x.OpenCamera(It.IsAny<string>())).Returns(camera);
+        var driver = new CameraDriver(test.Profile.Object, test.ExposureFactory.Object,
+            test.Backend.Cameras().Single(), test.Options, backend.Object);
+        try {
+            Assert.True(await driver.Connect(CancellationToken.None));
+            Assert.Equal(new[] { 100, 200, 800 }, driver.Gains);
+            Assert.Equal(100, driver.GainMin);
+            Assert.Equal(800, driver.GainMax);
         } finally {
             driver.Disconnect();
         }

@@ -1,4 +1,4 @@
-﻿using NINA.Core.Utility;
+using NINA.Core.Utility;
 using System;
 using System.Buffers;
 using System.Collections;
@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace Sony {
     #region Kernel32 Imports
@@ -118,7 +119,7 @@ namespace Sony {
             // Confirm the driver version meets the minimum required 1.0.1.16
             FileVersionInfo dllVersion = FileVersionInfo.GetVersionInfo(filename);
 
-            int[] v = { dllVersion.ProductMajorPart, dllVersion.ProductMinorPart, dllVersion.ProductPrivatePart, dllVersion.ProductBuildPart };
+            int[] v = { dllVersion.ProductMajorPart, dllVersion.ProductMinorPart, dllVersion.ProductBuildPart, dllVersion.ProductPrivatePart };
 
             if (dllVersion == null) {
                 throw new SonyException("The loaded Sony dll does not have version info - this is invalid");
@@ -171,11 +172,9 @@ namespace Sony {
             field.SetValue(this, d);
         }
 
-        internal byte[] LastImage {
-            get {
-                return _lastImage;
-            }
-        }
+        internal byte[] TakeLastImage() => Interlocked.Exchange(ref _lastImage, null);
+
+        internal void DiscardLastImage() => Interlocked.Exchange(ref _lastImage, null);
 
         internal IntPtr GetExportedFunction(IntPtr hDll, string name) {
             IntPtr methodPointer = Kernel32.GetProcAddress(_dllHandle, name);
@@ -288,8 +287,12 @@ namespace Sony {
 
         public UInt32 StartCapture(UInt32 hDevice, float exposureTime) {
             PropertyValue value = new PropertyValue();
-
-            fSetExposureTime(hDevice, exposureTime, ref value);
+            bool applied = ExposureTimeController.Apply(exposureTime,
+                () => fSetExposureTime(hDevice, exposureTime, ref value),
+                () => GetSinglePropertyValue(hDevice, 0xD20D).Value);
+            if (!applied) {
+                Logger.Warning("The camera has no learnt shutter-speed list. Its manually selected shutter speed will be used; run SonyCameraInfo to learn exposure settings before using the Flat Wizard.");
+            }
 
             ImageInfo info = new ImageInfo {
                 ImageMode = IMAGEMODE_PASSTHRU,

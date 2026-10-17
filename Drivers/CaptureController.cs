@@ -70,6 +70,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     return AbortResult.AlreadyRequested;
                 }
                 uint status = getStatus();
+                if (status == Reading || status == Processing) {
+                    return AbortResult.SoftCancelRequested;
+                }
                 if (status == StatusUnknown || (!IsBusy(status) && status != Created &&
                     status != Cancelled && status != Complete && status != Failed)) {
                     return AbortResult.SoftCancelRequested;

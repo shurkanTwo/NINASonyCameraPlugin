@@ -5,6 +5,17 @@ using NINA.RetroKiwi.Plugin.SonyCamera.Drivers;
 using Xunit;
 
 public class CaptureControllerTests {
+    [Theory]
+    [InlineData(0x8002u)]
+    [InlineData(0x8003u)]
+    public void NativeAbortDoesNotCancelAnImageBeingReadOrProcessed(uint status) {
+        var camera = new Camera { NativeCancelEnabled = true };
+        camera.Capture.Start(1);
+        camera.Status = status;
+        Assert.Equal(CaptureController.AbortResult.SoftCancelRequested, camera.Capture.Abort());
+        Assert.Equal(0, camera.Cancels);
+    }
+
     private sealed class Camera {
         internal uint Status = 2; // The native driver reports Failed when no capture exists.
         internal bool NativeCancelEnabled;

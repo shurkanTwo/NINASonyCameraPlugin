@@ -18,5 +18,7 @@
     <Compile Include="..\SonyCameraPluginNative\SonyTypes.cs" Link="SonyTypes.cs" />
     <Compile Include="..\SonyCameraPluginNative\SonyCameraInfo.cs" Link="SonyCameraInfo.cs" />
     <Compile Include="..\SonyCameraPluginNative\SonyDevice.cs" Link="SonyDevice.cs" />
+    <Compile Include="..\SonyCameraPluginNative\NativeCallExecutor.cs" Link="NativeCallExecutor.cs" />
+    <Compile Include="..\SonyCameraPluginNative\ExposureTimeController.cs" Link="ExposureTimeController.cs" />
   </ItemGroup>
 </Project>

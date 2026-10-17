@@ -83,6 +83,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
+        public bool IsOpen(uint cameraHandle) {
+            lock (cameraLock) return connected && cameraHandle == handle;
+        }
+
         public void CloseCamera(uint cameraHandle) {
             lock (cameraLock) {
                 RequireConnection(cameraHandle);

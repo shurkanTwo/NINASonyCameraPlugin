@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -35,6 +35,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private readonly CaptureController _capture;
         private readonly object connectionLock = new object();
 
+        private int _lastKnownGain = -1;
+        private int _lastKnownBatteryLevel;
         private SonyCameraInfo _camera = null;
         private double _lastCameraTemperature = double.NaN;
         private SonyDevice _device = null;
@@ -77,7 +79,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
             foreach (var propertyId in propertyCandidates) {
                 try {
-                    var options = _camera.GetPropertyInfo(propertyId)?.Options()?.Where(o => o.Value <= 0x00FFFFFF).ToList();
+                    var options = _camera.GetPropertyInfo(propertyId)?.Options()?.Where(o => o.Value > 0 && o.Value < 0x00FFFFFF)
+                        .GroupBy(o => o.Value).Select(group => group.First()).OrderBy(o => o.Value).ToList();
                     if (options != null && options.Count > 0) {
                         return options;
                     }
@@ -253,7 +256,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         public int BatteryLevel {
             get {
                 if (_camera != null) {
-                    return (int)GetPropertyValue(PROPID_BATTERY).Value;
+                    try {
+                        _lastKnownBatteryLevel = (int)GetPropertyValue(PROPID_BATTERY).Value;
+                    } catch (Exception ex) {
+                        Logger.Warning($"Unable to read Sony battery level: {ex.Message}");
+                    }
+                    return _lastKnownBatteryLevel;
                 } else {
                     return 0;
                 }
@@ -308,10 +316,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     try {
                         PropertyValue value = GetPropertyValue(PROPID_ISO);
 
-                        return (int)(value.Value == 0xffffff ? 0 : value.Value);
+                        _lastKnownGain = value.Value > 0 && value.Value < 0x00FFFFFF ? (int)value.Value : -1;
+                        return _lastKnownGain;
                     } catch (Exception ex) {
-                        Logger.Error("Problem getting gain", ex);
-                        return -1;
+                        Logger.Warning($"Unable to read Sony ISO: {ex.Message}");
+                        return _lastKnownGain;
                     }
                 } else {
                     return -1;
@@ -321,6 +330,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             set {
                 if (_camera != null) {
                     try {
+                        if (!Gains.Contains(value)) throw new ArgumentOutOfRangeException(nameof(value), "Select a supported manual ISO value.");
                         _driver.SetProperty(_camera.Handle, PROPID_ISO, (uint)value);
                         RaisePropertyChanged(nameof(Gain));
                     } catch (Exception ex) {
@@ -330,21 +340,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        public IList<int> Gains {
-            get {
-                List<int> gains = new List<int>();
-
-                foreach (var iso in GetAvailableIsoOptions()) {
-                    if (iso.Value == 0xffffff) {
-                        gains.Add(0); // AUTO
-                    } else {
-                        gains.Add((int)iso.Value);
-                    }
-                }
-
-                return gains;
-            }
-        }
+        public IList<int> Gains => GetAvailableIsoOptions().Select(option => (int)option.Value).ToList();
 
         public string Id => _device.Id == SimulatedSonyCameraBackend.DeviceId ? SimulatedSonyCameraBackend.DeviceId : "Sony";
 
@@ -362,7 +358,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public bool Connected {
             get {
-                return _camera != null;
+                return _camera != null && _driver.IsOpen(_camera.Handle);
             }
         }
 
@@ -486,8 +482,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 bool connected;
                 lock (connectionLock) {
                     token.ThrowIfCancellationRequested();
-                    if (_camera != null) return true;
+                    if (Connected) return true;
                     Volatile.Write(ref _lastCameraTemperature, double.NaN);
+                    _lastKnownGain = -1;
+                    _lastKnownBatteryLevel = 0;
                     try {
                         _camera = _driver.OpenCamera(_device.Id);
                     } catch (Exception ex) {
@@ -552,6 +550,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         public void StartExposure(CaptureSequence sequence) {
+            if (!Connected) throw new SonyException("Connect a Sony camera before starting an exposure.");
             if (_camera != null) {
                 try {
                     _capture.Start((float)sequence.ExposureTime);

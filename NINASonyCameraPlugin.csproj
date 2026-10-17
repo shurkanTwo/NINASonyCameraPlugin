@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
     <OutputType>Library</OutputType>
@@ -8,9 +8,6 @@
     <UseWPF>true</UseWPF>
     <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
   </PropertyGroup>
-  <ItemGroup>
-    <Reference Include="ReachFramework" />
-  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="NINA.Plugin" Version="3.2.0.3001-rc" />
     <PackageReference Include="System.ComponentModel.Composition" Version="8.0.0" />
@@ -69,7 +66,7 @@
     </None>
   </ItemGroup>
   <PropertyGroup />
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(OS)' == 'Windows_NT'">
-    <Exec Command="if not exist &quot;%25localappdata%25\NINA\Plugins\3.0.0&quot; (&#xA;  echo &quot;Creating $(PlatformName) Plugins folder&quot;&#xA;  mkdir &quot;%25localappdata%25\NINA\Plugins\3.0.0&quot;&#xA;)&#xA;if not exist &quot;%25localappdata%25\NINA\Plugins\3.0.0\$(TargetName)&quot; (&#xA;  echo &quot;Creating $(PlatformName) Plugins $(TargetName) folder&quot;&#xA;  mkdir &quot;%25localappdata%25\NINA\Plugins\3.0.0\$(TargetName)&quot;&#xA;)&#xA;&#xA;echo &quot;Copying $(PlatformName) $(TargetFileName)&quot;&#xA;xcopy &quot;$(TargetPath)&quot; &quot;%25localappdata%25\NINA\Plugins\3.0.0\$(TargetName)&quot; /h/i/c/k/e/r/y" />
+  <Target Name="PostBuild" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT' and '$(InstallPluginOnBuild)' == 'true'">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(LOCALAPPDATA)\NINA\Plugins\3.0.0\Sony Camera Plugin" />
   </Target>
 </Project>

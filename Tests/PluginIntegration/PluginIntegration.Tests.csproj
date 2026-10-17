@@ -14,5 +14,6 @@
     <PackageReference Include="Moq" Version="4.20.72" />
     <ProjectReference Include="..\..\NINASonyCameraPlugin.csproj" />
     <Compile Include="..\ManualTimeProvider.cs" Link="ManualTimeProvider.cs" />
+    <None Include="..\Temperature\Fixtures\a7iii-metadata.bin" Link="Fixtures\a7iii-metadata.bin" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
