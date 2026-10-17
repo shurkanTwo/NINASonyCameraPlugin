@@ -11,15 +11,22 @@ namespace Sony {
     // close/open/enumeration, because the old P/Invoke cannot be interrupted.
     public class SonyDriver {
         private static readonly Lazy<SonyDriver> _instance = new Lazy<SonyDriver>(() => new SonyDriver());
-        private static readonly NativeCallExecutor calls = new NativeCallExecutor();
+        private static readonly NativeCallExecutor sharedCalls = new NativeCallExecutor();
+        private readonly NativeCallExecutor calls;
         private readonly SonyMTPCameraDll _sonydll;
         private volatile SonyCameraInfo _camera;
         private int timeoutNotified;
+        private int consecutiveFailures;
+        private readonly HashSet<uint> knownGoodProperties = new HashSet<uint>();
+        private const int LostCameraFailureThreshold = 3;
 
         public static SonyDriver GetInstance() => _instance.Value;
 
-        public SonyDriver() {
-            _sonydll = new SonyMTPCameraDll();
+        public SonyDriver() : this(new SonyMTPCameraDll(), sharedCalls) { }
+
+        internal SonyDriver(SonyMTPCameraDll dll, NativeCallExecutor executor) {
+            _sonydll = dll;
+            calls = executor;
         }
 
         private T Invoke<T>(string operation, Func<T> action, int timeoutMs = 30000, int lockTimeoutMs = 30000) {
@@ -38,12 +45,29 @@ namespace Sony {
             }
         }
 
-        private T InvokeCamera<T>(uint handle, string operation, Func<T> action, int timeoutMs = 30000, int lockTimeoutMs = 30000) {
+        private T InvokeCamera<T>(uint handle, string operation, Func<T> action, int timeoutMs = 30000,
+            int lockTimeoutMs = 30000, uint? propertyId = null) {
             return Invoke(operation, () => {
                 if (_camera == null || _camera.Handle != handle) {
                     throw new SonyException($"Cannot {operation}: the camera handle is no longer open.");
                 }
-                return action();
+                try {
+                    T result = action();
+                    consecutiveFailures = 0;
+                    if (propertyId.HasValue) knownGoodProperties.Add(propertyId.Value);
+                    return result;
+                } catch (SonyException ex) when (ex.ErrorCode.HasValue && ex.ErrorCode != 50 &&
+                    (!propertyId.HasValue || knownGoodProperties.Contains(propertyId.Value))) {
+                    // Count only returned native errors. An unsupported property,
+                    // verification mismatch or lock wait is not a lost device.
+                    if (++consecutiveFailures >= LostCameraFailureThreshold) {
+                        _camera = null;
+                        _sonydll.DiscardLastImage();
+                        calls.Stop();
+                        Logger.Error($"Sony camera failed {consecutiveFailures} consecutive native operations while trying to {operation}. Treating it as disconnected; restart NINA and power-cycle the camera before reconnecting.", ex);
+                    }
+                    throw;
+                }
             }, timeoutMs, lockTimeoutMs);
         }
 
@@ -76,6 +100,8 @@ namespace Sony {
                 // Even a late successful open stays inaccessible after timeout:
                 // CameraInfo, IsOpen and every native entry check the sticky gate.
                 _camera = camera;
+                consecutiveFailures = 0;
+                knownGoodProperties.Clear();
                 return camera;
             } catch {
                 // Cleanup remains inside the same bounded operation. If this
@@ -95,18 +121,17 @@ namespace Sony {
         }
 
         public PropertyValue GetProperty(uint handle, uint propertyId) =>
-            InvokeCamera(handle, "read camera property", () => _sonydll.GetSinglePropertyValue(handle, propertyId), lockTimeoutMs: 500);
+            InvokeCamera(handle, "read camera property", () => _sonydll.GetSinglePropertyValue(handle, propertyId), lockTimeoutMs: 500, propertyId: propertyId);
         public void SetProperty(uint handle, uint propertyId, uint value) =>
-            InvokeCamera(handle, "set camera property", () => { _sonydll.SetPropertyValue(handle, propertyId, value); return true; });
+            InvokeCamera(handle, "set camera property", () => { _sonydll.SetPropertyValue(handle, propertyId, value); return true; }, propertyId: propertyId);
         public byte[] GetLiveView(uint handle) => InvokeCamera(handle, "download LiveView", () => _sonydll.GetPreviewImage(handle));
         public uint GetCaptureStatus(uint handle) => InvokeCamera(handle, "read capture status", () => _sonydll.GetCaptureStatus(handle));
 
         public void StartCapture(uint handle, float exposureTime) {
             InvokeCamera(handle, "start capture", () => {
                 _sonydll.DiscardLastImage();
-                double longestNonBulb = ExposureTimeController.LongestNonBulb(
-                    _camera.GetPropertyInfo(0xFFFF)?.Options()?.Select(option => option.Value));
-                return _sonydll.StartCapture(handle, exposureTime, longestNonBulb);
+                var shutterSpeeds = _camera.GetPropertyInfo(0xFFFF)?.Options()?.Select(option => option.Value).ToArray();
+                return _sonydll.StartCapture(handle, exposureTime, shutterSpeeds);
             }, timeoutMs: 60000);
         }
 

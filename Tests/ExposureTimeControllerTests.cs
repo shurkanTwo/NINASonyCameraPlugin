@@ -3,66 +3,104 @@ using Sony;
 using Xunit;
 
 public class ExposureTimeControllerTests {
+    private static readonly uint[] Shutters = { 0, 0x001E0001, 0x00040001, 0x00010001,
+        0x00040005, 0x00030005, 0x00010002, 0x0001003C, 0x00010050, 0x00010064 };
+
+    [Fact]
+    public void NativeSelectionAlsoRoundsLearnedStepsBeforeComparingDistances() {
+        uint[] halfStop = { 0, 0x001E0001, 0x000100B4, 0x000100FA };
+        Assert.Equal(0x000100FAu, ExposureTimeController.SelectShutter(0.00478f, halfStop));
+        Assert.True(ExposureTimeController.Apply(0.00478f, halfStop, () => 0, () => 0x000100FAu, timeoutMs: 0));
+    }
+
     [Fact]
     public void BulbBoundaryUsesTheLearnedNumericShutterList() {
-        double longest = ExposureTimeController.LongestNonBulb(new uint[] { 0, 0x00040001, 0x00010002 });
-        Assert.Equal(4, longest);
-        Assert.True(ExposureTimeController.Apply(5, () => 0, () => 0, longestNonBulb: longest));
+        uint[] learned = { 0, 0x00040001, 0x00010002 };
+        Assert.True(ExposureTimeController.Apply(5, learned, () => 0, () => 0));
         Assert.Throws<InvalidOperationException>(() => ExposureTimeController.Apply(
-            4.1, () => 0, () => 0x00040001, timeoutMs: 0, longestNonBulb: longest));
+            4.1, learned, () => 0, () => 0x00040001, timeoutMs: 0));
+        Assert.Equal(0x00040001u, ExposureTimeController.SelectShutter(4.000001, learned));
     }
 
     [Fact]
     public void BulbRequestCannotAcceptAStaleNumericShutter() {
         Assert.Throws<InvalidOperationException>(() => ExposureTimeController.Apply(
-            31, () => 0, () => 0x001E0001u, timeoutMs: 0));
+            31, Shutters, () => 0, () => 0x001E0001u, timeoutMs: 0));
     }
 
     [Fact]
     public void BackToBackShutterChangeIsRetriedUntilItTakes() {
         int attempts = 0;
-        Assert.True(ExposureTimeController.Apply(0.5, () => { attempts++; return 0; },
+        Assert.True(ExposureTimeController.Apply(0.5, Shutters, () => { attempts++; return 0; },
             () => attempts < 3 ? 0x00010001u : 0x00010002u, pause: () => { }));
         Assert.Equal(3, attempts);
     }
 
     [Theory]
-    [InlineData(1.0 / 80, 7.0 / 480)]
-    [InlineData(0.6, 0.699)]
-    public void NearestSupportedShutterIsAcceptedAcrossIrregularSteps(double actual, double requested) {
-        uint raw = actual < 0.1 ? 0x00010050u : 0x0006000Au;
-        Assert.True(ExposureTimeController.Apply(requested, () => 0, () => raw, timeoutMs: 0));
+    [InlineData(0.011439, 0x00010050u)]
+    [InlineData(0.88, 0x00040005u)]
+    [InlineData(7.0 / 480, 0x00010050u)]
+    [InlineData(0.699, 0x00030005u)]
+    [InlineData(0.9, 0x00040005u)]
+    public void SelectionMatchesNativeRoundingAndNearestStep(double requested, uint expected) {
+        Assert.Equal(expected, ExposureTimeController.SelectShutter(requested, Shutters));
+        Assert.True(ExposureTimeController.Apply(requested, Shutters, () => 0, () => expected, timeoutMs: 0));
+    }
+
+    [Theory]
+    [InlineData(0.011439, 0x00010064u, 0x00010050u)]
+    [InlineData(0.88, 0x00010001u, 0x00040005u)]
+    public void StaleAdjacentShutterIsRetriedDespiteBeingWithinTheOldRatio(double requested, uint stale, uint expected) {
+        int attempts = 0;
+        Assert.True(ExposureTimeController.Apply(requested, Shutters,
+            () => { attempts++; return 0; }, () => attempts == 1 ? stale : expected, pause: () => { }));
+        Assert.Equal(2, attempts);
+        Assert.Throws<InvalidOperationException>(() => ExposureTimeController.Apply(
+            requested, Shutters, () => 0, () => stale, timeoutMs: 0));
     }
 
     [Fact]
-    public void StalledShutterFailsInsteadOfExposingAtTheOldSpeed() {
-        var error = Assert.Throws<InvalidOperationException>(() => ExposureTimeController.Apply(
-            0.5, () => 0, () => 0x00010001, timeoutMs: 0));
-        Assert.Contains("Capture was not started", error.Message);
+    public void OldBulbIsRetriedBeforeAShortExposure() {
+        int attempts = 0;
+        Assert.True(ExposureTimeController.Apply(0.5, Shutters, () => { attempts++; return 0; },
+            () => attempts == 1 ? 0u : 0x00010002u, pause: () => { }));
+        Assert.Equal(2, attempts);
+        Assert.Throws<InvalidOperationException>(() => ExposureTimeController.Apply(
+            0.5, Shutters, () => 0, () => 0, timeoutMs: 0));
+    }
+
+    [Fact]
+    public void EquivalentRationalReadbackIsAccepted() {
+        Assert.True(ExposureTimeController.Apply(0.5, Shutters, () => 0, () => 0x00020004u, timeoutMs: 0));
     }
 
     [Fact]
     public void APartialMoveDoesNotCountAsSuccessfulSettling() {
         int attempts = 0;
-        Assert.Throws<InvalidOperationException>(() => ExposureTimeController.Apply(0.01,
+        Assert.Throws<SonyException>(() => ExposureTimeController.Apply(0.01, Shutters,
             () => ++attempts == 1 ? 0u : 31u, () => 0x00010002u, pause: () => { }));
         Assert.Equal(2, attempts);
     }
 
     [Fact]
-    public void UnsupportedExposureControlIsExplicit() {
-        Assert.False(ExposureTimeController.Apply(1, () => 50, () => throw new Exception("No readback expected")));
+    public void UnsupportedExposureControlRetainsManualFallback() {
+        Assert.False(ExposureTimeController.Apply(1, null, () => 50, () => throw new Exception("No readback expected")));
+        Assert.Throws<InvalidOperationException>(() => ExposureTimeController.Apply(
+            1, null, () => 0, () => 0x00010001u));
     }
 
     [Theory]
-    [InlineData(0u)]
     [InlineData(0xFFFFFFFFu)]
-    public void InvalidOrUnexpectedBulbReadbackCannotStartShortExposures(uint raw) {
-        Assert.Throws<InvalidOperationException>(() => ExposureTimeController.Apply(1, () => 0, () => raw));
+    [InlineData(0x00010000u)]
+    [InlineData(0x00000001u)]
+    public void MalformedNonzeroReadbackCannotStartExposures(uint raw) {
+        Assert.Throws<InvalidOperationException>(() => ExposureTimeController.Apply(1, Shutters, () => 0, () => raw));
     }
 
-    [Fact]
-    public void LongBulbExposureIsSupported() {
-        Assert.True(ExposureTimeController.Apply(120, () => 0, () => 0));
+    [Theory]
+    [InlineData(0)]
+    [InlineData(120)]
+    public void BulbExposureIsSupported(double requested) {
+        Assert.True(ExposureTimeController.Apply(requested, Shutters, () => 0, () => 0));
     }
 }

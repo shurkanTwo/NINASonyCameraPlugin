@@ -35,7 +35,8 @@ namespace Sony {
     #endregion
 
     internal class SonyException : Exception {
-        internal SonyException(string message) : base(message) { }
+        internal uint? ErrorCode { get; }
+        internal SonyException(string message, uint? errorCode = null) : base(message) { ErrorCode = errorCode; }
     }
 
     #region DLL Class
@@ -265,7 +266,7 @@ namespace Sony {
                 uint hr = fGetPreviewImage(hDevice, ref info);
 
                 if (hr != ERROR_SUCCESS) {
-                    throw new SonyException($"Unable to get preview image, error {hr}");
+                    throw new SonyException($"Unable to get preview image, error {hr}", hr);
                 }
 
                 byte[] returndata = new byte[info.ImageSize];
@@ -285,11 +286,11 @@ namespace Sony {
             }
         }
 
-        public UInt32 StartCapture(UInt32 hDevice, float exposureTime, double longestNonBulb = 30) {
+        public UInt32 StartCapture(UInt32 hDevice, float exposureTime, IEnumerable<uint> shutterSpeeds = null) {
             PropertyValue value = new PropertyValue();
-            bool applied = ExposureTimeController.Apply(exposureTime,
+            bool applied = ExposureTimeController.Apply(exposureTime, shutterSpeeds,
                 () => fSetExposureTime(hDevice, exposureTime, ref value),
-                () => GetSinglePropertyValue(hDevice, 0xD20D).Value, longestNonBulb: longestNonBulb);
+                () => GetSinglePropertyValue(hDevice, 0xD20D).Value);
             if (!applied) {
                 Logger.Warning("The camera has no learnt shutter-speed list. Its manually selected shutter speed will be used; run SonyCameraInfo to learn exposure settings before using the Flat Wizard.");
             }
@@ -300,8 +301,9 @@ namespace Sony {
             };
 
             try {
-                if (fStartCapture(hDevice, ref info) != ERROR_SUCCESS) {
-                    throw new SonyException("Problem starting capture");
+                uint result = fStartCapture(hDevice, ref info);
+                if (result != ERROR_SUCCESS) {
+                    throw new SonyException($"Problem starting capture, error {result}", result);
                 }
 
                 return info.Status;
@@ -327,8 +329,9 @@ namespace Sony {
             ImageInfo info = new ImageInfo();
 
             try {
-                if (fGetCaptureStatus(hDevice, ref info) != ERROR_SUCCESS) {
-                    throw new SonyException("Unable to get image status");
+                uint result = fGetCaptureStatus(hDevice, ref info);
+                if (result != ERROR_SUCCESS) {
+                    throw new SonyException($"Unable to get image status, error {result}", result);
                 }
 
                 // If the capture is complete, copy the image
@@ -428,8 +431,9 @@ namespace Sony {
         public PropertyValue GetSinglePropertyValue(UInt32 hCamera, UInt32 propertyId) {
             PropertyValue option = new PropertyValue();
 
-            if (fGetSinglePropertyValue(hCamera, propertyId, ref option) != ERROR_SUCCESS) {
-                throw new SonyException("Problem getting property value for " + propertyId.ToString());
+            uint result = fGetSinglePropertyValue(hCamera, propertyId, ref option);
+            if (result != ERROR_SUCCESS) {
+                throw new SonyException($"Problem getting property value for {propertyId}, error {result}", result);
             }
 
             return option;
@@ -446,8 +450,9 @@ namespace Sony {
         }
 
         public void SetPropertyValue(UInt32 hCamera, UInt32 propertyId, UInt32 value) {
-            if (fSetPropertyValue(hCamera, propertyId, value) != ERROR_SUCCESS) {
-                throw new SonyException("Problem setting property " + propertyId.ToString() + " to " + value.ToString());
+            uint result = fSetPropertyValue(hCamera, propertyId, value);
+            if (result != ERROR_SUCCESS) {
+                throw new SonyException($"Problem setting property {propertyId} to {value}, error {result}", result);
             }
         }
 
@@ -482,7 +487,7 @@ namespace Sony {
             UInt32 hr = fSetFocusPosition(hCamera, ref focusPosition);
 
             if (hr != ERROR_SUCCESS) {
-                throw new SonyException($"Problem setting focus position to {focusPosition}, error {hr}");
+                throw new SonyException($"Problem setting focus position to {focusPosition}, error {hr}", hr);
             }
         }
 

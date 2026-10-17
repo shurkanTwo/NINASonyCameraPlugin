@@ -25,7 +25,7 @@ Native NINA plugin for Sony mirrorless/DSLR bodies over the Sony MTP interface, 
 
 ## Installation
 
-Download a maintained build from [this fork’s releases](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases) and follow the **[manual installation instructions](INSTALLATION.md)**. The first community release is a preview for manual testing. It replaces the upstream plugin; install one copy only.
+Download a maintained build from [this fork’s releases](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases) and follow the **[manual installation instructions](INSTALLATION.md)**. Community releases are previews for manual testing. It replaces the upstream plugin; install one copy only.
 
 The N.I.N.A. plugin manager currently distributes the upstream release. This fork has not been submitted as its update source.
 
@@ -37,8 +37,8 @@ The N.I.N.A. plugin manager currently distributes the upstream release. This for
 - The driver chooses the nearest learnt built-in shutter speed; durations beyond the longest numeric speed use Bulb. The requested mode is verified before capture.
 - To keep a copy on the camera's memory card as well as sending it to NINA, use the camera's **PC Remote Settings → Still Img. Save Dest. → PC+Camera** setting (see below).
 - Powering off/unplugging the camera while connected can crash NINA via Windows' MTP stack (PortableDeviceApi.dll access violation); disconnect in NINA first to avoid it.
-- Native driver calls are serialized across camera and lens operations. If a native call stops responding, restart NINA and power-cycle the camera before reconnecting. Automatic USB reconnection is not included.
-- Shutter changes are read back and retried before capture. If a readable shutter remains outside supported-step rounding after the retry budget, capture fails instead of silently using the old exposure. Cameras without a learnt shutter list retain their manually selected shutter setting; learn that list before using automatic flats. Sky Flat behavior is not claimed to be resolved.
+- Native driver calls are serialized across camera and lens operations. If a native call stops responding, restart NINA and power-cycle the camera before reconnecting. After three consecutive qualifying native errors, the camera is marked disconnected and further native access is also blocked until NINA restarts. Never-working properties and explicit unsupported-property results do not trigger this guard. Automatic USB reconnection is not included.
+- Shutter changes are read back and retried before capture. If the camera does not reach the nearest learnt shutter step after the retry budget, capture fails instead of silently using the old exposure. Cameras without a learnt shutter list retain their manually selected shutter setting; learn that list before using automatic flats. Sky Flat behavior is not claimed to be resolved.
 - “Enable native cancel” is off by default and saved per NINA profile. With it off, abort cancels the wait and discards the exposure, while the camera finishes capturing; another exposure can start once the camera finishes. Enabling it allows native cancellation during aborts before image readout/processing, which may crash NINA on some camera models and Windows drivers. New exposure requests never cancel an existing capture.
 
 ## Simulator development

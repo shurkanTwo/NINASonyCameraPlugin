@@ -11,6 +11,8 @@ namespace Sony {
 
         internal bool IsUnavailable => Volatile.Read(ref unavailable) != 0;
 
+        internal void Stop() => Volatile.Write(ref unavailable, 1);
+
         internal T Invoke<T>(Func<T> action, int timeoutMs = 30000, int lockTimeoutMs = 30000) {
             if (IsUnavailable) throw new InvalidOperationException("The Sony driver stopped responding. Restart NINA and power-cycle the camera before reconnecting.");
             if (!gate.Wait(lockTimeoutMs)) throw new TimeoutException("The Sony driver is busy with another operation.");
@@ -19,7 +21,7 @@ namespace Sony {
                 Task<T> call = Task.Run(action);
                 try {
                     if (!call.Wait(timeoutMs)) {
-                        Volatile.Write(ref unavailable, 1);
+                        Stop();
                         _ = call.ContinueWith(failed => { _ = failed.Exception; },
                             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
                         throw new TimeoutException("The Sony driver stopped responding. Restart NINA and power-cycle the camera before reconnecting.");

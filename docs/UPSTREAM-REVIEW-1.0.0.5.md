@@ -1,5 +1,7 @@
 # Upstream review for community preview 1.0.0.5
 
+> Historical review of 1.0.0.5. A subsequent audit found gaps in cancellation, shutter verification and repeated-failure detection. These are corrected in [1.0.0.6](RELEASE-REVIEW-1.0.0.6.md); the original assessment below is retained as release history.
+
 Reviewed against upstream `master`, commit
 `8bd9042bcd477fd028c2aa2adfe34260192de936` (upstream release 1.0.0.4).
 This fork preserves Doug Henderson's authorship, copyright notices, MPL-2.0,

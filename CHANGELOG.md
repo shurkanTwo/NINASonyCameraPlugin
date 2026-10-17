@@ -1,5 +1,17 @@
 # Sony Camera Plugin
 
+## 1.0.0.6 — corrective community preview
+
+Follow-up to the 1.0.0.5 audit, retaining all previously integrated contributions and Doug Henderson's original authorship. Install manually using [INSTALLATION.md](INSTALLATION.md).
+
+- Preserve aborts received during capture-start preflight. An aborted pending start cannot launch an exposure after its status check returns; a rejected busy start preserves cancellation of the preceding capture.
+- Verify the specific nearest learnt shutter step using the native driver's float rounding and absolute-distance selection, replacing the broad ratio that accepted a stalled adjacent speed.
+- Retry a valid previous Bulb readback when switching to a short numeric exposure. Malformed readbacks still fail, and a persistent mismatch cannot start capture.
+- Restore the repeated-failure camera-loss protection adapted from Robert Hasson's upstream #13: three consecutive qualifying native errors mark the camera disconnected and block all further native access until NINA restarts. Never-working properties, explicit unsupported results, lock contention and shutter-verification mismatches do not count. A successful camera operation resets the count. No native close, retry or automatic reconnection is attempted after the guard trips.
+- Add regression coverage using the production capture controller and managed native wrappers, replacing only native delegates and NINA logging/notifications for portable tests.
+
+See [the corrective review](docs/RELEASE-REVIEW-1.0.0.6.md). Physical camera/USB operation remains unverified; this is a prerelease for manual testing and is not distributed through NINA's plugin manager.
+
 ## 1.0.0.5 — community preview
 
 First maintained release from [Lucas Lepski’s fork](https://github.com/shurkanTwo/NINASonyCameraPlugin), preserving Doug Henderson’s original authorship and MPL-2.0. Install manually using [INSTALLATION.md](INSTALLATION.md). This preview is not distributed through NINA’s plugin manager.

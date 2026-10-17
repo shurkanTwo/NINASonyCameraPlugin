@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 
 namespace Sony {
@@ -9,50 +10,58 @@ namespace Sony {
     internal static class ExposureTimeController {
         private const uint NotSupported = 50;
 
-        internal static double LongestNonBulb(IEnumerable<uint> shutterSpeeds) {
-            double longest = 0;
-            if (shutterSpeeds != null) {
-                foreach (uint raw in shutterSpeeds) {
-                    uint numerator = raw >> 16;
-                    uint denominator = raw & 0xFFFF;
-                    if (raw != uint.MaxValue && numerator > 0 && denominator > 0) {
-                        longest = Math.Max(longest, (double)numerator / denominator);
-                    }
+        private static bool IsNumeric(uint raw) => raw != uint.MaxValue && (raw >> 16) > 0 && (raw & 0xFFFF) > 0;
+        private static float NativeRounded(float seconds) => MathF.Round(seconds * 100000f, MidpointRounding.AwayFromZero) / 100000f;
+        private static float Seconds(uint raw) => NativeRounded((float)(raw >> 16) / (raw & 0xFFFF));
+
+        internal static uint? SelectShutter(double requested, IEnumerable<uint> shutterSpeeds) {
+            if (!double.IsFinite(requested) || requested < 0 || requested > float.MaxValue) {
+                throw new ArgumentOutOfRangeException(nameof(requested));
+            }
+            var numeric = shutterSpeeds?.Where(IsNumeric).OrderByDescending(Seconds).ToArray();
+            if (numeric == null || numeric.Length == 0) return null;
+
+            // Match SetExposureTime's float arithmetic and five-decimal rounding.
+            // Equal distances choose the shorter step in the descending ladder.
+            float target = NativeRounded((float)requested);
+            if (requested == 0 || target > Seconds(numeric[0])) return 0;
+            uint nearest = numeric[0];
+            float distance = MathF.Abs(target - Seconds(nearest));
+            foreach (uint raw in numeric.Skip(1)) {
+                float candidate = MathF.Abs(target - Seconds(raw));
+                if (candidate <= distance) {
+                    nearest = raw;
+                    distance = candidate;
                 }
             }
-            return longest > 0 ? longest : 30;
+            return nearest;
         }
 
-        internal static bool Apply(double requested, Func<uint> setExposure, Func<uint> readShutter,
-            int timeoutMs = 12000, Action pause = null, double longestNonBulb = 30) {
-            if (!double.IsFinite(requested) || requested < 0) throw new ArgumentOutOfRangeException(nameof(requested));
+        internal static bool Apply(double requested, IEnumerable<uint> shutterSpeeds,
+            Func<uint> setExposure, Func<uint> readShutter, int timeoutMs = 12000, Action pause = null) {
+            uint? expected = SelectShutter(requested, shutterSpeeds);
             pause ??= () => Thread.Sleep(300);
             Stopwatch elapsed = Stopwatch.StartNew();
-            double actual = double.NaN;
-            bool requiresBulb = requested == 0 || requested > longestNonBulb;
+            uint actual = uint.MaxValue;
             do {
                 uint result = setExposure();
                 if (result == NotSupported) return false;
-                if (result != 0) throw new InvalidOperationException($"Unable to set exposure time to {requested}s, error {result}.");
+                if (result != 0) throw new SonyException($"Unable to set exposure time to {requested}s, error {result}.", result);
+                if (!expected.HasValue) throw new InvalidOperationException("The learnt shutter-speed list is unavailable; the requested shutter cannot be verified.");
 
-                uint raw = readShutter();
-                // Sony uses zero for Bulb. Zero-duration captures retain the
-                // native driver's existing Bulb behavior.
-                if (raw == 0 && requiresBulb) return true;
-                uint numerator = raw >> 16;
-                uint denominator = raw & 0xFFFF;
-                if (numerator == 0 || denominator == 0 || raw == uint.MaxValue) {
+                actual = readShutter();
+                // Zero is valid Bulb, including a temporarily unchanged old mode.
+                if (actual == 0 && expected == 0) return true;
+                if (actual != 0 && !IsNumeric(actual)) {
                     throw new InvalidOperationException("The camera did not report a verifiable shutter speed.");
                 }
-                actual = (double)numerator / denominator;
-                // Sony's irregular ladder includes a 4/3 gap. The native
-                // driver chooses by absolute distance: its worst half-step
-                // ratio is 7/6, below 1.17 and the smallest whole step (1.20).
-                if (!requiresBulb && requested > 0 && Math.Max(actual / requested, requested / actual) <= 1.17) return true;
+                if (actual != 0 && expected != 0 &&
+                    (ulong)(actual >> 16) * (expected.Value & 0xFFFF) ==
+                    (ulong)(expected.Value >> 16) * (actual & 0xFFFF)) return true;
                 if (elapsed.ElapsedMilliseconds >= timeoutMs) break;
                 pause();
             } while (elapsed.ElapsedMilliseconds < timeoutMs);
-            throw new InvalidOperationException($"Exposure time was not applied: requested {requested}s, camera reports {actual}s. Capture was not started.");
+            throw new InvalidOperationException($"Exposure time was not applied: requested {requested}s, expected shutter 0x{expected:X8}, camera reports 0x{actual:X8}. Capture was not started.");
         }
     }
 }

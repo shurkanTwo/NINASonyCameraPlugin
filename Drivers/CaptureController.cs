@@ -18,6 +18,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         internal enum AbortResult { AlreadyRequested, NativeCancelRequested, SoftCancelRequested }
 
         private readonly object captureLock = new object();
+        private readonly object requestLock = new object();
         private readonly Func<uint> getStatus;
         private readonly Action<float> startCapture;
         private readonly Func<bool> cancelCapture;
@@ -27,6 +28,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             internal int CancelRequested;
         }
         private CaptureRequest currentRequest = new CaptureRequest();
+        private CaptureRequest pendingRequest;
 
         internal CaptureController(Func<uint> getStatus, Action<float> startCapture,
             Func<bool> cancelCapture, Func<bool> nativeCancelEnabled, int cancelLockTimeoutMs = 1000) {
@@ -39,26 +41,44 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         internal void Start(float exposureTime) {
             lock (captureLock) {
-                uint status = getStatus();
-                if (IsBusy(status)) {
-                    throw new InvalidOperationException("Cannot start exposure: camera is still busy with a previous exposure.");
+                var request = new CaptureRequest();
+                lock (requestLock) {
+                    pendingRequest = request;
                 }
-                if (status != Created && status != Cancelled && status != Complete && status != Failed) {
-                    throw new InvalidOperationException($"Cannot start exposure: capture status unavailable or unexpected ({status}).");
-                }
+                try {
+                    uint status = getStatus();
+                    if (IsBusy(status)) {
+                        throw new InvalidOperationException("Cannot start exposure: camera is still busy with a previous exposure.");
+                    }
+                    if (status != Created && status != Cancelled && status != Complete && status != Failed) {
+                        throw new InvalidOperationException($"Cannot start exposure: capture status unavailable or unexpected ({status}).");
+                    }
 
-                // A rejected start must not clear cancellation of the preceding exposure.
-                Volatile.Write(ref currentRequest, new CaptureRequest());
-                // Serialize the native start itself: it can replace the native capture object.
-                startCapture(exposureTime);
+                    lock (requestLock) {
+                        Volatile.Write(ref currentRequest, request);
+                        pendingRequest = null;
+                    }
+                    ThrowIfCancelled(request);
+                    // Serialize the native start itself: it can replace the native capture object.
+                    startCapture(exposureTime);
+                } finally {
+                    lock (requestLock) {
+                        pendingRequest = null;
+                    }
+                }
             }
         }
 
         internal AbortResult Abort() {
             // Record cancellation before waiting for the lock, including while StartCapture is blocked.
-            var request = Volatile.Read(ref currentRequest);
-            if (Interlocked.Exchange(ref request.CancelRequested, 1) != 0) {
-                return AbortResult.AlreadyRequested;
+            CaptureRequest request;
+            lock (requestLock) {
+                request = pendingRequest ?? currentRequest;
+                int alreadyRequested = Interlocked.Exchange(ref request.CancelRequested, 1);
+                // If preflight rejects the new request, the previous capture must
+                // still retain this abort. No native call runs under requestLock.
+                Interlocked.Exchange(ref currentRequest.CancelRequested, 1);
+                if (alreadyRequested != 0) return AbortResult.AlreadyRequested;
             }
             if (!nativeCancelEnabled() || !Monitor.TryEnter(captureLock, cancelLockTimeoutMs)) {
                 return AbortResult.SoftCancelRequested;
