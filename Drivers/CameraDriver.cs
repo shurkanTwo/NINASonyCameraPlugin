@@ -12,6 +12,7 @@ using NINA.Core.Model.Equipment;
 using NINA.Core.Utility;
 using NINA.Core.Utility.Notification;
 using NINA.Equipment.Interfaces;
+using NINA.Equipment.Exceptions;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Equipment.Model;
 using NINA.Equipment.SDK.CameraSDKs.ASTPANSDK;
@@ -557,7 +558,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     _capture.Start((float)sequence.ExposureTime);
                 } catch (InvalidOperationException ex) {
                     Logger.Warning(ex.Message);
-                    throw new SonyException(ex.Message);
+                    throw new CameraExposureFailedException(ex.Message, ex);
                 }
             }
         }

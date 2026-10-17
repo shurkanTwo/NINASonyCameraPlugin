@@ -1,10 +1,11 @@
 # Sony Camera Plugin
 
-## 1.0.0.7 — metadata and documentation maintenance
+## 1.0.0.7 — exposure error classification and release maintenance
 
 - Use GitHub handles in plugin descriptions, author/contributor display metadata and the packaged source notice. Preserve the original copyright notice and commit authorship.
 - Correct README version, release status and installation links; retain the explicit limits of automated testing and manual distribution.
-- Keep the capture, native-call, focuser, temperature and simulator behavior from 1.0.0.6 unchanged. This release is a fresh versioned build; older release assets and checksums remain intact.
+- Report a rejected busy capture-start through NINA's CameraExposureFailedException path, preserving the original message and cause. This avoids the duplicate generic-error notification path in NINA 3.2 while retaining capture rejection, prior cancellation and the existing soft-abort warning. Actual UI confirmation is still needed for the full popup report in this fork's issue #5.
+- Publish a fresh versioned build; older release assets and checksums remain intact.
 
 See [the session review](docs/SESSION-REVIEW-1.0.0.7.md) and [manual installation/rollback](INSTALLATION.md). Physical camera/USB/MTP, LiveView, lens operation and complete Sky Flat behavior remain unverified. NINA's plugin manager still uses the upstream release source.
 
