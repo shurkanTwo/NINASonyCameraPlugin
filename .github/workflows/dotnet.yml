@@ -41,7 +41,7 @@ jobs:
           $assets = New-Item -ItemType Directory -Path 'release-assets'
           Copy-Item $dll.FullName $package.FullName
           Copy-Item 'LICENSE.txt', 'INSTALLATION.md' $package.FullName
-          "Original author: Doug Henderson`nMaintained by: Lucas Lepski and contributors`nLicense: MPL-2.0`nSource: https://github.com/$env:GITHUB_REPOSITORY/tree/$env:GITHUB_SHA`nBuild: https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID`n" | Set-Content "$package/SOURCE.txt" -Encoding utf8
+          "Original author: @dougforpres`nMaintained by: @shurkanTwo and contributors`nLicense: MPL-2.0`nSource: https://github.com/$env:GITHUB_REPOSITORY/tree/$env:GITHUB_SHA`nBuild: https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID`n" | Set-Content "$package/SOURCE.txt" -Encoding utf8
           Compress-Archive -Path "$package/*" -DestinationPath "$assets/SonyCameraPlugin-$version.zip"
           Copy-Item $dll.FullName $assets.FullName
           $hashes = Get-ChildItem $assets.FullName -File | Sort-Object Name | ForEach-Object {

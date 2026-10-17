@@ -6,7 +6,7 @@ using NINA.Core.Utility;
 using NINA.Core.Utility.Notification;
 
 namespace Sony {
-    // Adapted from Robert Hasson's PR #13: camera and focuser share one native
+    // Adapted from @totoantibes's PR #13: camera and focuser share one native
     // entry point. A timeout permanently blocks further native calls, including
     // close/open/enumeration, because the old P/Invoke cannot be interrupted.
     public class SonyDriver {

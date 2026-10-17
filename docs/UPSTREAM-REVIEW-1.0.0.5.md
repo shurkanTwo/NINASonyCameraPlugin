@@ -4,25 +4,25 @@
 
 Reviewed against upstream `master`, commit
 `8bd9042bcd477fd028c2aa2adfe34260192de936` (upstream release 1.0.0.4).
-This fork preserves Doug Henderson's authorship, copyright notices, MPL-2.0,
-and original commit history. Maintenance does not imply Doug has reviewed or
+This fork preserves @dougforpres's authorship, copyright notices, MPL-2.0,
+and original commit history. Maintenance does not imply @dougforpres has reviewed or
 endorsed this combined build. Upstream issues/PRs remain under upstream control.
 
 ## Included work
 
-- [#10](https://github.com/dougforpres/NINASonyCameraPlugin/pull/10), Lucas Lepski: current capture coordination, idempotent cancellation, and per-profile native cancel opt-in. The prerequisite is included through #15, retaining its original commits. Additional regression checks now keep Reading/Processing soft-cancelled even when native cancel is enabled.
-- [#11](https://github.com/dougforpres/NINASonyCameraPlugin/pull/11), Christian Palm: focuser capability checks and unsupported temperature compensation no longer throw.
-- [#14](https://github.com/dougforpres/NINASonyCameraPlugin/pull/14), Robert Hasson: release native image/metadata buffers in `finally` after copying, including errors. Native `DLL.cpp` was checked: `exportBytes` allocates with `CoTaskMemAlloc`, transferring the exported buffer to the caller. Capture COMPLETE exports a frame and cleans up the native capture; copying inline on the first COMPLETE result is required.
-- [#15](https://github.com/dougforpres/NINASonyCameraPlugin/pull/15), Lucas Lepski: opt-in managed camera simulator, portable capture tests, and actual-plugin Windows integration tests.
-- [#16](https://github.com/dougforpres/NINASonyCameraPlugin/pull/16), Lucas Lepski: obtaining and launching a configured lens-learning tool.
-- [#17](https://github.com/dougforpres/NINASonyCameraPlugin/pull/17), Lucas Lepski: keeping RAW copies on the camera memory card.
-- [#18](https://github.com/dougforpres/NINASonyCameraPlugin/pull/18), Lucas Lepski: bounded ARW camera-temperature extraction with independent metadata fixtures; merged with the simulator's connection/download paths. Integration checks verify that NINA's camera property and image metadata receive the same value and clear unavailable readings.
+- [#10](https://github.com/dougforpres/NINASonyCameraPlugin/pull/10), @shurkanTwo: current capture coordination, idempotent cancellation, and per-profile native cancel opt-in. The prerequisite is included through #15, retaining its original commits. Additional regression checks now keep Reading/Processing soft-cancelled even when native cancel is enabled.
+- [#11](https://github.com/dougforpres/NINASonyCameraPlugin/pull/11), @christian-photo: focuser capability checks and unsupported temperature compensation no longer throw.
+- [#14](https://github.com/dougforpres/NINASonyCameraPlugin/pull/14), @totoantibes: release native image/metadata buffers in `finally` after copying, including errors. Native `DLL.cpp` was checked: `exportBytes` allocates with `CoTaskMemAlloc`, transferring the exported buffer to the caller. Capture COMPLETE exports a frame and cleans up the native capture; copying inline on the first COMPLETE result is required.
+- [#15](https://github.com/dougforpres/NINASonyCameraPlugin/pull/15), @shurkanTwo: opt-in managed camera simulator, portable capture tests, and actual-plugin Windows integration tests.
+- [#16](https://github.com/dougforpres/NINASonyCameraPlugin/pull/16), @shurkanTwo: obtaining and launching a configured lens-learning tool.
+- [#17](https://github.com/dougforpres/NINASonyCameraPlugin/pull/17), @shurkanTwo: keeping RAW copies on the camera memory card.
+- [#18](https://github.com/dougforpres/NINASonyCameraPlugin/pull/18), @shurkanTwo: bounded ARW camera-temperature extraction with independent metadata fixtures; merged with the simulator's connection/download paths. Integration checks verify that NINA's camera property and image metadata receive the same value and clear unavailable readings.
 
-## Adapted stability work from Robert Hasson's #13
+## Adapted stability work from @totoantibes's #13
 
 [#13](https://github.com/dougforpres/NINASonyCameraPlugin/pull/13) includes older
 copies of #10/#11. It was reviewed in full and adapted rather than merged over
-the newer capture controller. Robert retains credit for the exposure readback,
+the newer capture controller. @totoantibes retains credit for the exposure readback,
 ISO cleanup, native serialization/timeout, and focuser hardening work.
 
 Included:
@@ -48,7 +48,7 @@ Deferred after review:
 - [#3 SD card copies](https://github.com/dougforpres/NINASonyCameraPlugin/issues/3): documented camera-side setting.
 - [#4 cancel crashes](https://github.com/dougforpres/NINASonyCameraPlugin/issues/4): mitigations and regression checks included; native DLL/MTP access violations cannot be claimed fixed by managed tests.
 - [#5 flat exposure changes](https://github.com/dougforpres/NINASonyCameraPlugin/issues/5): shutter application is checked/retried, and AUTO ISO is excluded. NINA Sky Flat behavior remains unverified; this release does not claim a complete Sky Flat fix.
-- [#6 NINA 3.2 interface](https://github.com/dougforpres/NINASonyCameraPlugin/issues/6): already resolved by merged #7/#8 in 1.0.0.4, retained here. Original contributors include @naixx and Lucas Lepski.
+- [#6 NINA 3.2 interface](https://github.com/dougforpres/NINASonyCameraPlugin/issues/6): already resolved by merged #7/#8 in 1.0.0.4, retained here. Original contributors include @naixx and @shurkanTwo.
 - [#9 lens learning](https://github.com/dougforpres/NINASonyCameraPlugin/issues/9): tool location and launch requirements documented; the installer does not include a ready-to-use lens-learning executable.
 
 Closed WIP [#12 video intervals](https://github.com/dougforpres/NINASonyCameraPlugin/pull/12)
@@ -79,5 +79,5 @@ commit. Existing NU1701 warnings from legacy dependencies remain.
 Automated native-call policy tests use controlled callbacks; simulator tests do
 not execute the Sony DLL, USB/MTP, LiveView, or physical lenses. The metadata fixture
 is not a complete decodable ARW. No physical-camera validation of this combined
-release has been performed. Robert's reported ILCE-7S field results apply to his
+release has been performed. @totoantibes's reported ILCE-7S field results apply to his
 build, not automatically to this adapted integration.

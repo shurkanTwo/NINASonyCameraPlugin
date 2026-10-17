@@ -5,7 +5,7 @@ using System.Linq;
 using System.Threading;
 
 namespace Sony {
-    // Based on Robert Hasson's PR #13 readback/retry workaround. Keep the
+    // Based on @totoantibes's PR #13 readback/retry workaround. Keep the
     // decision independent of the DLL so stalled shutter changes are testable.
     internal static class ExposureTimeController {
         private const uint NotSupported = 50;

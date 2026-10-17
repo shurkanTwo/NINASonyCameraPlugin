@@ -1,6 +1,6 @@
 # Sony Camera Plugin
 
-This is a **community-maintained fork** of [Doug Henderson’s Sony Camera Plugin](https://github.com/dougforpres/NINASonyCameraPlugin). Doug remains the original author. Lucas Lepski ([@shurkanTwo](https://github.com/shurkanTwo)) maintains these releases, incorporating contributions from the upstream community while we await a reply from Doug about shared maintenance.
+This is a **community-maintained fork** of [@dougforpres’s Sony Camera Plugin](https://github.com/dougforpres/NINASonyCameraPlugin). @dougforpres remains the original author. [@shurkanTwo](https://github.com/shurkanTwo) maintains these releases, incorporating contributions from the upstream community while awaiting a reply from @dougforpres about shared maintenance.
 
 **[Download maintained releases](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases)** · **[Manual installation and rollback](INSTALLATION.md)** · **[Report a problem with this fork](https://github.com/shurkanTwo/NINASonyCameraPlugin/issues)**
 
@@ -25,7 +25,7 @@ Native NINA plugin for Sony mirrorless/DSLR bodies over the Sony MTP interface, 
 
 ## Installation
 
-Download a maintained build from [this fork’s releases](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases) and follow the **[manual installation instructions](INSTALLATION.md)**. Community releases are previews for manual testing. It replaces the upstream plugin; install one copy only.
+Download a maintained build from [this fork’s releases](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases) and follow the **[manual installation instructions](INSTALLATION.md)**. The current release, **1.0.0.7**, is a regular GitHub release marked Latest; physical-camera validation remains outstanding. It replaces the upstream plugin; install one copy only.
 
 The N.I.N.A. plugin manager currently distributes the upstream release. This fork has not been submitted as its update source.
 
@@ -114,7 +114,7 @@ Menu locations and labels vary by Sony model; consult your camera's manual if th
 ## Support
 
 - For this maintained fork, [open an issue here](https://github.com/shurkanTwo/NINASonyCameraPlugin/issues). Include the NINA version, plugin version, camera model, native Sony driver version, and relevant logs. Remove private paths and device identifiers before sharing logs.
-- Doug’s [original project](https://github.com/dougforpres/NINASonyCameraPlugin) and [homepage](https://retro.kiwi) remain linked for attribution and upstream driver information. Support for changes in this fork is handled here.
+- @dougforpres’s [original project](https://github.com/dougforpres/NINASonyCameraPlugin) and [homepage](https://retro.kiwi) remain linked for attribution and upstream driver information. Support for changes in this fork is handled here.
 - You may be asked for a driver log when reporting bugs: https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Troubleshooting#the-driver-dll-log
 - Help links:
   - My camera is not supported (https://github.com/dougforpres/ASCOMSonyCameraDriver/wiki/Installation#if-you-dont-have-a-supported-camera-model);
@@ -124,11 +124,11 @@ Menu locations and labels vary by Sony model; consult your camera's manual if th
 
 ## Metadata
 
-- Version: 1.0.0.5
-- Author: Doug Henderson
-- Maintainer of this fork: Lucas Lepski [@shurkanTwo](https://github.com/shurkanTwo)
-- Contributors include Robert Hasson [@totoantibes](https://github.com/totoantibes), Christian Palm [@christian-photo](https://github.com/christian-photo), and [@naixx](https://github.com/naixx); original commit authorship is preserved.
-- Review and release scope: [upstream work reviewed for 1.0.0.5](docs/UPSTREAM-REVIEW-1.0.0.5.md)
+- Version: 1.0.0.7
+- Author: @dougforpres
+- Maintainer of this fork: [@shurkanTwo](https://github.com/shurkanTwo)
+- Contributors include [@totoantibes](https://github.com/totoantibes), [@christian-photo](https://github.com/christian-photo), and [@naixx](https://github.com/naixx); original commit authorship is preserved.
+- Review and release scope: [session review and 1.0.0.7](docs/SESSION-REVIEW-1.0.0.7.md), [1.0.0.6 corrections](docs/RELEASE-REVIEW-1.0.0.6.md), and [upstream integration history](docs/UPSTREAM-REVIEW-1.0.0.5.md)
 - Minimum NINA version: 3.2.0.3001
 - License: MPL-2.0 (https://www.mozilla.org/en-US/MPL/2.0/)
 - Original author’s homepage: https://retro.kiwi

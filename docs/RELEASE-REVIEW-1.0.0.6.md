@@ -1,13 +1,13 @@
-# Corrective review: 1.0.0.6 community preview
+# Corrective review: 1.0.0.6 community release
 
-This release addresses all four findings from the follow-up audit of 1.0.0.5. It retains that release's original contributor history and adapted work. Doug Henderson remains the original author; Robert Hasson's PR #13 remains credited as the source of the native stability and shutter retry work. The original MPL-2.0 license is unchanged.
+This release addresses all four findings from the follow-up audit of 1.0.0.5. It retains that release's original contributor history and adapted work. @dougforpres remains the original author; @totoantibes's PR #13 remains credited as the source of the native stability and shutter retry work. The original MPL-2.0 license is unchanged.
 
 ## Corrections
 
 1. **Abort during preflight:** a pending capture request is registered before the potentially blocking native status read. Abort cancels that request and the preceding capture's wait. If preflight succeeds, the cancelled pending request cannot start an exposure; if it rejects a busy camera, cancellation of the preceding capture remains intact. A delayed abort for a previous capture still cannot native-cancel a newer capture.
 2. **Expected shutter step:** verification selects from the learned numeric shutter list using the native driver's float arithmetic, five-decimal rounding of both requests and learned values, absolute distance and shorter-step tie behavior. It compares the actual readback against the selected step, accepting equivalent fractions. The old global ratio could accept the wrong adjacent speed. The audit's 0.011439-second and 0.88-second examples now retry until they reach 1/80 and 0.8 seconds respectively.
 3. **Old Bulb mode:** zero is a valid Bulb readback, including a temporary previous mode while switching to a numeric shutter. Such a mismatch now retries within the existing 12-second budget. Invalid nonzero encodings still fail immediately. A persistent mismatch fails without starting capture. Explicit native unsupported-exposure control retains the documented manual-shutter fallback; a successful native adjustment without a usable learned list cannot be verified and fails.
-4. **Camera-loss guard:** three consecutive qualifying returned native errors stop the shared native executor, hide the camera from camera/focuser connection state, and block subsequent native access, including cleanup, enumeration and reopen, until NINA restarts. Successful camera operations reset the count. Property errors count only after that property has worked; explicit unsupported results are excluded. Managed validation/verification failures and lock waits are excluded. This restores the previously omitted protection from Robert's PR #13 while retaining the stricter recovery policy: no automatic close/retry of a failed handle and no revival of a timed-out worker.
+4. **Camera-loss guard:** three consecutive qualifying returned native errors stop the shared native executor, hide the camera from camera/focuser connection state, and block subsequent native access, including cleanup, enumeration and reopen, until NINA restarts. Successful camera operations reset the count. Property errors count only after that property has worked; explicit unsupported results are excluded. Managed validation/verification failures and lock waits are excluded. This restores the previously omitted protection from @totoantibes's PR #13 while retaining the stricter recovery policy: no automatic close/retry of a failed handle and no revival of a timed-out worker.
 
 ## Verification
 
@@ -17,7 +17,7 @@ Regression cases cover blocked preflight with native cancel both enabled and dis
 
 The Windows workflow runs the portable capture/native-policy suite, ARW temperature suite, full-plugin simulator integration suite and release build before packaging the manual-install DLL/ZIP and SHA256 checksums. SOURCE.txt records the exact source commit and build run.
 
-These checks do not establish physical Sony camera, USB/MTP, lens, LiveView or complete Sky Flat compatibility. This remains a preview for manual testing. Experimental USB reconnection, retries of still-running timed-out calls, forced cancellation of busy captures and closed WIP #12 video intervals remain deferred.
+These checks do not establish physical Sony camera, USB/MTP, lens, LiveView or complete Sky Flat compatibility. The release was initially published as a preview and later marked regular/Latest with unchanged binaries. Version 1.0.0.7 subsequently corrects metadata and documentation; physical-camera validation is still required. Experimental USB reconnection, retries of still-running timed-out calls, forced cancellation of busy captures and closed WIP #12 video intervals remain deferred.
 
 ## Installation and history
 

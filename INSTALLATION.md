@@ -2,12 +2,12 @@
 
 These instructions install the community-maintained build from
 [shurkanTwo/NINASonyCameraPlugin](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases).
-The original plugin was developed by **Doug Henderson**. This fork is maintained
-by **Lucas Lepski and contributors** while shared upstream maintenance is being discussed.
+The original plugin was developed by **@dougforpres**. This fork is maintained
+by **@shurkanTwo and contributors** while shared upstream maintenance is being discussed.
 
-The current community release, **1.0.0.6**, is a preview for manual testing. Windows
-builds and automated tests are checked; physical Sony camera/USB operation has
-not been verified for this combined release. See the release notes for scope.
+The current community release, **1.0.0.7**, is a regular GitHub release marked Latest.
+Windows builds and automated tests are checked; physical Sony camera/USB operation
+remains unverified for this combined release. See the release notes for scope.
 
 ## Requirements
 
@@ -17,7 +17,7 @@ not been verified for this combined release. See the release notes for scope.
 
 ## Install or replace an existing version
 
-1. Download **`SonyCameraPlugin-1.0.0.6.zip`** from the [1.0.0.6 release](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases/tag/1.0.0.6). Choose the release asset, rather than GitHub's automatic “Source code” archives. Extract it to a temporary folder. The plugin is `NINA.RetroKiwi.Plugin.SonyCamera.dll`.
+1. Download **`SonyCameraPlugin-1.0.0.7.zip`** from the [1.0.0.7 release](https://github.com/shurkanTwo/NINASonyCameraPlugin/releases/tag/1.0.0.7). Choose the release asset, rather than GitHub's automatic “Source code” archives. Extract it to a temporary folder. The plugin is `NINA.RetroKiwi.Plugin.SonyCamera.dll`.
 2. Disconnect the camera and focuser in NINA, then **close every NINA window** before changing plugin files.
 3. Press **Win+R**, enter `%LOCALAPPDATA%\NINA\Plugins`, and open the plugin-version folder used by your NINA installation. NINA 3.x installations commonly use **`3.0.0`**: this folder tracks plugin compatibility, so it need not match the NINA version in About. If several version folders exist, use the one in NINA's startup log (`%LOCALAPPDATA%\NINA\Logs`); look for the path from which the Sony plugin was loaded.
 4. If Sony Camera Plugin is already installed, locate its existing `NINA.RetroKiwi.Plugin.SonyCamera.dll` and copy the entire containing plugin folder **outside `%LOCALAPPDATA%\NINA\Plugins`** as a backup. Replace the DLL **in that existing folder**, even if the folder name differs from the example. Do not create another plugin folder containing a second copy. Keep the rest of the existing folder's files.
@@ -29,7 +29,7 @@ not been verified for this combined release. See the release notes for scope.
 
 6. Copy the extracted DLL into the existing or newly created folder. The ZIP also contains the license, source reference, and these instructions; you can keep those files alongside it. It contains no replacement NINA runtime libraries or native Sony driver.
 7. If Windows shows an **Unblock** checkbox in the downloaded ZIP or DLL's Properties, unblock the file. Alternatively run `Unblock-File` in PowerShell on that downloaded ZIP/DLL before copying/extracting it.
-8. Restart NINA. In its plugin manager, confirm **Sony Camera Plugin 1.0.0.6** is loaded; the description identifies the community-maintained build. Select the Sony camera in Equipment and connect it.
+8. Restart NINA. In its plugin manager, confirm **Sony Camera Plugin 1.0.0.7** is loaded; the description identifies the community-maintained build. Select the Sony camera in Equipment and connect it.
 9. Leave **Enable native cancel** disabled initially. Try one short exposure and check the downloaded image, ISO and exposure before using the build for a sequence. Temperature appears only after downloading an ARW that contains a supported Sony temperature reading.
 
 This is a replacement for the upstream plugin, with the same identifier so existing
@@ -45,7 +45,7 @@ The release includes **`SHA256SUMS.txt`** for its ZIP and standalone DLL. In
 PowerShell, calculate a downloaded file's hash and compare it to the matching entry:
 
 ```powershell
-Get-FileHash "$env:USERPROFILE\Downloads\SonyCameraPlugin-1.0.0.6.zip" -Algorithm SHA256
+Get-FileHash "$env:USERPROFILE\Downloads\SonyCameraPlugin-1.0.0.7.zip" -Algorithm SHA256
 ```
 
 ## Roll back
