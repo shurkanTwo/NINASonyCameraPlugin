@@ -16,8 +16,6 @@ First consolidated maintained release from [@shurkanTwo's fork](https://github.c
 
 Existing NINA 3.2/empty-ISO fixes from 1.0.0.4, including @naixx's contribution, remain included. Experimental USB auto-reconnection, retries of still-running timed-out native calls, forced cancellation after repeated busy starts, and closed WIP #12 video intervals remain deferred.
 
-This combined package replaces the earlier maintenance builds labelled 1.0.0.5, 1.0.0.6 and 1.0.0.7. Their release entries and tags are retired; the original commits remain in history. If you installed an earlier build, download this package again and replace the DLL manually. The lower consolidated version includes all reviewed fixes.
-
 See the [session review](docs/SESSION-REVIEW.md), [corrective review](docs/CORRECTIVE-REVIEW.md) and [upstream review and issue coverage](docs/UPSTREAM-REVIEW.md). Validation uses automated tests and Windows CI. Physical Sony camera/USB/MTP, LiveView, lens operation and complete Sky Flat behavior remain unverified. Native access violations and newer camera support are not claimed fixed. Existing legacy-package NU1701 restore warnings remain.
 
 ## 1.0.0.4
