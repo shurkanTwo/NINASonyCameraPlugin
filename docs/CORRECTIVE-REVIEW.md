@@ -1,6 +1,6 @@
-# Corrective review: 1.0.0.6 community release
+# Corrective review of the upstream integration
 
-This release addresses all four findings from the follow-up audit of 1.0.0.5. It retains that release's original contributor history and adapted work. @dougforpres remains the original author; @totoantibes's PR #13 remains credited as the source of the native stability and shutter retry work. The original MPL-2.0 license is unchanged.
+The corrections at [`0341e8f`](https://github.com/shurkanTwo/NINASonyCameraPlugin/tree/0341e8f9cf6e5e1c5b13352d485285e00300df0e) address all four findings from the follow-up audit of the initial integration at `413290f`. They are included in the consolidated 1.0.0.5 release, retaining the original contributor history and adapted work. @dougforpres remains the original author; @totoantibes's PR #13 remains credited as the source of the native stability and shutter retry work. The original MPL-2.0 license is unchanged.
 
 ## Corrections
 
@@ -17,8 +17,8 @@ Regression cases cover blocked preflight with native cancel both enabled and dis
 
 The Windows workflow runs the portable capture/native-policy suite, ARW temperature suite, full-plugin simulator integration suite and release build before packaging the manual-install DLL/ZIP and SHA256 checksums. SOURCE.txt records the exact source commit and build run.
 
-These checks do not establish physical Sony camera, USB/MTP, lens, LiveView or complete Sky Flat compatibility. The release was initially published as a preview and later marked regular/Latest with unchanged binaries. Version 1.0.0.7 subsequently corrects metadata and documentation; physical-camera validation is still required. Experimental USB reconnection, retries of still-running timed-out calls, forced cancellation of busy captures and closed WIP #12 video intervals remain deferred.
+These checks do not establish physical Sony camera, USB/MTP, lens, LiveView or complete Sky Flat compatibility. The [session review](SESSION-REVIEW.md) subsequently corrected the exposure-failure classification, metadata and documentation. All of these fixes are included in the consolidated release; physical-camera validation is still required. Experimental USB reconnection, retries of still-running timed-out calls, forced cancellation of busy captures and closed WIP #12 video intervals remain deferred.
 
 ## Installation and history
 
-Use [INSTALLATION.md](../INSTALLATION.md) and install one copy of the maintained plugin. This fork is not an automatic update source in NINA's plugin manager. Version 1.0.0.5 remains available as historical release evidence; its follow-up findings and these corrections are recorded explicitly rather than replacing its assets or tag.
+Use [INSTALLATION.md](../INSTALLATION.md) and install one copy of the maintained plugin. This fork is not an automatic update source in NINA's plugin manager. Earlier build sources remain available through the immutable commit links above. Intermediate release entries and tags are retired in favor of one combined package; users of any earlier maintenance build should download the consolidated package again and replace the DLL manually.

@@ -1,6 +1,6 @@
-# Upstream review for community preview 1.0.0.5
+# Upstream contribution review
 
-> Historical review of 1.0.0.5. A subsequent audit found gaps in cancellation, shutter verification and repeated-failure detection. These are corrected in [1.0.0.6](RELEASE-REVIEW-1.0.0.6.md); the original assessment below is retained as release history.
+> Historical assessment of the initial integration at [`413290f`](https://github.com/shurkanTwo/NINASonyCameraPlugin/tree/413290f68b114cb0393e52ae8eabdf4f12bbd1da). A subsequent audit found gaps in cancellation, shutter verification and repeated-failure detection. The [corrective review](CORRECTIVE-REVIEW.md) supersedes the affected statements below, including the old shutter-ratio check. All corrections are included in the consolidated 1.0.0.5 release; this initial assessment is retained as review history.
 
 Reviewed against upstream `master`, commit
 `8bd9042bcd477fd028c2aa2adfe34260192de936` (upstream release 1.0.0.4).
