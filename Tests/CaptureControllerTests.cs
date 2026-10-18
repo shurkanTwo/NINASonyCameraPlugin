@@ -232,7 +232,7 @@ public class CaptureControllerTests {
         var start = Task.Factory.StartNew(() => camera.Capture.Start(1), TaskCreationOptions.LongRunning);
         try {
             Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
-            var abort = Task.Run(() => camera.Capture.Abort());
+            var abort = Task.Factory.StartNew(() => camera.Capture.Abort(), TaskCreationOptions.LongRunning);
             Assert.Equal(CaptureController.AbortResult.SoftCancelRequested,
                 await abort.WaitAsync(TimeSpan.FromSeconds(2)));
             Assert.Equal(0, camera.Cancels);

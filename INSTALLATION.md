@@ -9,11 +9,6 @@ The current community release, **1.0.0.5**, is a regular GitHub release marked L
 Windows builds and automated tests are checked; physical Sony camera/USB operation
 remains unverified for this combined release. See the release notes for scope.
 
-The consolidated **1.0.0.5** package supersedes the earlier maintenance builds,
-including those labelled 1.0.0.5, 1.0.0.6 and 1.0.0.7. If you installed any of
-those builds, download this package again and replace the DLL manually using the
-steps below. All reviewed fixes are included despite the lower version number.
-
 ## Requirements
 
 - Windows 10 1809 or newer and N.I.N.A. 3.2 or newer (minimum 3.2.0.3001).

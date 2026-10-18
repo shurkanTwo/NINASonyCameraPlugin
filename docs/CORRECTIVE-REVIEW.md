@@ -21,4 +21,4 @@ These checks do not establish physical Sony camera, USB/MTP, lens, LiveView or c
 
 ## Installation and history
 
-Use [INSTALLATION.md](../INSTALLATION.md) and install one copy of the maintained plugin. This fork is not an automatic update source in NINA's plugin manager. Earlier build sources remain available through the immutable commit links above. Intermediate release entries and tags are retired in favor of one combined package; users of any earlier maintenance build should download the consolidated package again and replace the DLL manually.
+Use [INSTALLATION.md](../INSTALLATION.md) and install one copy of the maintained plugin. This fork is not an automatic update source in NINA's plugin manager. Original contributor history and review evidence are preserved through the immutable commit links above.
