@@ -7,8 +7,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public IEnumerable<SonyDevice> Cameras() => driver.Cameras();
         public SonyCameraInfo OpenCamera(string id) => driver.OpenCamera(id);
+        public SonyCameraInfo ReopenCamera(uint handle, string id) => driver.ReopenCamera(handle, id);
         public void CloseCamera(uint handle) => driver.CloseCamera(handle);
         public bool IsOpen(uint handle) => driver.IsOpen(handle);
+        public bool CanReopen => driver.CanReopen;
         public PropertyValue GetProperty(uint handle, uint propertyId) => driver.GetProperty(handle, propertyId);
         public void SetProperty(uint handle, uint propertyId, uint value) => driver.SetProperty(handle, propertyId, value);
         public byte[] GetLiveView(uint handle) => driver.GetLiveView(handle);

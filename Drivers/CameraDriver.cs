@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -38,7 +39,39 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         private int _lastKnownGain = -1;
         private int _lastKnownBatteryLevel;
-        private SonyCameraInfo _camera = null;
+        private volatile SonyCameraInfo _camera = null;
+        // Set when an exposure fails or the camera stops answering (e.g. USB unplugged);
+        // the next exposure reopens the camera first so an unattended sequence can carry on.
+        private volatile bool _reopenNeeded;
+        private volatile bool _reopening;
+        // How long an exposure waits for an unplugged camera to come back before failing.
+        // Failing at once would burn through the rest of a sequence in seconds.
+        private readonly TimeSpan _reopenWait;
+        private static readonly TimeSpan DefaultReopenWait = TimeSpan.FromMinutes(2);
+        // Each failed attempt (camera not back yet) already takes about a second.
+        private const int ReopenRetryIntervalMs = 1000;
+        private const int ReopenWaitPollMs = 250;
+        private volatile bool _stopReopenWait;
+        private int _requestedGain = -1;
+        private const int GainRestoreAttempts = 3;
+        private const int IsoReadingWaitMs = 5000;
+        private const int IsoReadingPollMs = 250;
+        // NINA calls AbortExposure to clean up after a failed exposure too; that is not a
+        // user abort, and there is no capture left to wait for, so it must not warn.
+        private volatile bool _exposureFailed;
+        private volatile bool _starting;
+        // An exposure that has not finished after twice its length (Sony long-exposure noise
+        // reduction doubles it) plus this margin is treated as lost, so a camera stuck after a
+        // USB drop cannot hang the sequence.
+        private readonly TimeSpan _exposureTimeoutMargin;
+        private static readonly TimeSpan DefaultExposureTimeoutMargin = TimeSpan.FromMinutes(2);
+        private double _currentExposureSeconds;
+        // When the camera is still finishing an earlier exposure (e.g. the sequence was stopped
+        // and restarted), wait for it instead of failing: failing at once lets a "continue on
+        // error" sequence run through all of its exposures in a fraction of a second.
+        // Null: as long as that exposure could still take; zero: do not wait.
+        private readonly TimeSpan? _busyWaitLimit;
+        private const int BusyPollMs = 250;
         private double _lastCameraTemperature = double.NaN;
         private SonyDevice _device = null;
         private IProfileService _profileService;
@@ -48,7 +81,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private short _readoutModeForNormalImages;
         private AsyncObservableCollection<BinningMode> _binningModes;
 
-        public CameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, SonyDevice device, IPluginOptionsAccessor pluginSettings, ISonyCameraBackend driver = null, Action<string> showWarning = null) {
+        public CameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, SonyDevice device, IPluginOptionsAccessor pluginSettings, ISonyCameraBackend driver = null, Action<string> showWarning = null, TimeSpan? reopenWait = null, TimeSpan? exposureTimeoutMargin = null, TimeSpan? busyWaitLimit = null) {
+            _reopenWait = reopenWait ?? DefaultReopenWait;
+            _exposureTimeoutMargin = exposureTimeoutMargin ?? DefaultExposureTimeoutMargin;
+            _busyWaitLimit = busyWaitLimit;
             _profileService = profileService;
             _exposureDataFactory = exposureDataFactory;
             _device = device;
@@ -71,18 +107,36 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             return _driver.GetProperty(_camera.Handle, id);
         }
 
+        // NINA's Equipment > Camera "Default gain" dropdown binds straight to Gains. Handing it a
+        // new list on every read (and on every Gains change notification) made WPF rebuild the
+        // dropdown and blank the selection, so keep one list per opened camera, and the same list
+        // instance across a reopen whose ISO options are unchanged.
+        private SonyCameraInfo _isoOptionsCamera;
+        private IReadOnlyList<PropertyValueOption> _isoOptions = Array.Empty<PropertyValueOption>();
+        private IList<int> _gains = new List<int>();
+
         private IReadOnlyList<PropertyValueOption> GetAvailableIsoOptions() {
-            if (_camera == null) {
+            SonyCameraInfo camera = _camera;
+            if (camera == null) {
                 return Array.Empty<PropertyValueOption>();
+            }
+            if (ReferenceEquals(camera, _isoOptionsCamera)) {
+                return _isoOptions;
             }
 
             uint[] propertyCandidates = { PROPID_ISOS, PROPID_ISO };
 
             foreach (var propertyId in propertyCandidates) {
                 try {
-                    var options = _camera.GetPropertyInfo(propertyId)?.Options()?.Where(o => o.Value > 0 && o.Value < 0x00FFFFFF)
+                    var options = camera.GetPropertyInfo(propertyId)?.Options()?.Where(o => o.Value > 0 && o.Value < 0x00FFFFFF)
                         .GroupBy(o => o.Value).Select(group => group.First()).OrderBy(o => o.Value).ToList();
                     if (options != null && options.Count > 0) {
+                        var gains = options.Select(option => (int)option.Value).ToList();
+                        if (!gains.SequenceEqual(_gains)) {
+                            _gains = gains;
+                        }
+                        _isoOptions = options;
+                        _isoOptionsCamera = camera;
                         return options;
                     }
                 } catch (Exception ex) {
@@ -132,9 +186,151 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             } catch (Exception ex) {
                 Logger.Warning($"Unable to get capture status ({reason}); camera may not have responded: {ex.Message}.");
                 status = CaptureController.StatusUnknown;
+                _reopenNeeded = true;
                 return false;
             }
         }
+
+        // Close the unresponsive handle and open the camera again.
+        private bool TryReopenCamera(bool firstAttempt) {
+            bool reopened = false;
+            lock (connectionLock) {
+                SonyCameraInfo previous = _camera;
+                if (previous == null) {
+                    return false;
+                }
+
+                _reopening = true;
+                try {
+                    if (firstAttempt) Logger.Warning("The Sony camera stopped responding; reopening it before the next exposure.");
+                    _camera = _driver.ReopenCamera(previous.Handle, _device.Id)
+                        ?? throw new SonyException("Reopening the Sony camera returned no camera.");
+                    _reopenNeeded = false;
+                    reopened = true;
+                } catch (Exception ex) {
+                    // Expected every few seconds while the camera is unplugged; only log the first.
+                    if (firstAttempt) Logger.Warning($"Unable to reopen the Sony camera yet; waiting for it to come back. {ex.Message}");
+                    else Logger.Debug($"Sony camera still not reopened: {ex.Message}");
+                } finally {
+                    _reopening = false;
+                }
+            }
+
+            if (reopened) {
+                Logger.Info("Sony camera reopened.");
+                RestoreRequestedGain();
+                _showWarning("The Sony camera stopped responding and was reconnected automatically.");
+                NotifyGainPropertiesChanged();
+            }
+            return reopened;
+        }
+
+        // Retry the reopen until the camera is back, the wait runs out, or the exposure is aborted.
+        // A brief USB drop then just delays this exposure instead of failing it.
+        private bool WaitForReopen() {
+            _stopReopenWait = false;
+            var waited = Stopwatch.StartNew();
+            for (int attempt = 0; ; attempt++) {
+                if (TryReopenCamera(firstAttempt: attempt == 0)) {
+                    return true;
+                }
+
+                var nextAttempt = waited.Elapsed + TimeSpan.FromMilliseconds(ReopenRetryIntervalMs);
+                while (waited.Elapsed < nextAttempt) {
+                    if (_stopReopenWait || _camera == null || waited.Elapsed >= _reopenWait) {
+                        return false;
+                    }
+                    Thread.Sleep(ReopenWaitPollMs);
+                }
+            }
+        }
+
+        // Returns false if the wait was ended by an abort or disconnect.
+        private bool WaitWhileCameraBusy() {
+            // The previous exposure can take at most as long as its own timeout.
+            TimeSpan limit = _busyWaitLimit ??
+                TimeSpan.FromSeconds(Math.Max(0, _currentExposureSeconds) * 2) + _exposureTimeoutMargin;
+            if (limit <= TimeSpan.Zero) {
+                return true;
+            }
+
+            _stopReopenWait = false;
+            var waited = Stopwatch.StartNew();
+            bool logged = false;
+            while (waited.Elapsed < limit && _camera != null) {
+                if (_stopReopenWait) {
+                    return false;
+                }
+                if (!TryGetCaptureStatus(_driver, out uint status, "waiting for previous exposure") || !CaptureController.IsBusy(status)) {
+                    return true;
+                }
+                if (!logged) {
+                    Logger.Info("The Sony camera is still finishing the previous exposure; waiting for it before starting the next one.");
+                    logged = true;
+                }
+                Thread.Sleep(BusyPollMs);
+            }
+            return true;
+        }
+
+        // NINA sets the ISO before the exposure, which happens while the camera is still away;
+        // apply it to the reopened camera. Sony ISO changes are relative steps from the value the
+        // driver last read, and a just-reopened camera reports 0 until its settings arrive -
+        // stepping from that left the wrong ISO. So wait for a real reading, then set and verify.
+        private void RestoreRequestedGain() {
+            int gain = _requestedGain;
+            SonyCameraInfo camera = _camera;
+            if (gain <= 0 || camera == null) {
+                return;
+            }
+
+            uint current = 0;
+            for (int attempt = 0; attempt < GainRestoreAttempts; attempt++) {
+                current = WaitForIsoReading(camera.Handle);
+                if (current == (uint)gain) {
+                    Logger.Info($"Restored ISO {gain} on the reopened Sony camera.");
+                    _lastKnownGain = gain;
+                    return;
+                }
+                if (current == 0) {
+                    break;
+                }
+                try {
+                    _driver.SetProperty(camera.Handle, PROPID_ISO, (uint)gain);
+                } catch (Exception ex) {
+                    Logger.Warning($"Setting ISO {gain} on the reopened Sony camera failed: {ex.Message}");
+                }
+            }
+
+            current = WaitForIsoReading(camera.Handle);
+            if (current == (uint)gain) {
+                Logger.Info($"Restored ISO {gain} on the reopened Sony camera.");
+                _lastKnownGain = gain;
+            } else {
+                Logger.Warning($"Could not restore ISO {gain} on the reopened Sony camera; it reports {(current == 0 ? "no ISO yet" : current.ToString())}.");
+            }
+        }
+
+        // Returns the camera's ISO once it reports one (0 = not read yet), or 0 if it does not in time.
+        private uint WaitForIsoReading(uint handle) {
+            var waited = Stopwatch.StartNew();
+            while (true) {
+                try {
+                    uint value = GetIsoValue(handle);
+                    if (value != 0) {
+                        return value;
+                    }
+                } catch (Exception ex) {
+                    Logger.Debug($"Waiting for the reopened Sony camera to report its ISO: {ex.Message}");
+                }
+                if (waited.ElapsedMilliseconds >= IsoReadingWaitMs) {
+                    return 0;
+                }
+                Thread.Sleep(IsoReadingPollMs);
+            }
+        }
+
+        private uint GetIsoValue(uint handle) => _driver.GetProperty(handle, PROPID_ISO).Value;
 
         #endregion
 
@@ -256,12 +452,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public int BatteryLevel {
             get {
-                if (_camera != null) {
+                if (_camera != null && !_reopenNeeded) {
                     try {
                         _lastKnownBatteryLevel = (int)GetPropertyValue(PROPID_BATTERY).Value;
                     } catch (Exception ex) {
                         Logger.Warning($"Unable to read Sony battery level: {ex.Message}");
                     }
+                    return _lastKnownBatteryLevel;
+                } else if (_camera != null) {
+                    // Waiting to reopen the camera; report the last reading rather than an error.
                     return _lastKnownBatteryLevel;
                 } else {
                     return 0;
@@ -313,6 +512,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public int Gain {
             get {
+                if (_camera != null && _reopenNeeded) {
+                    // Waiting to reopen the camera; report the last reading rather than an error.
+                    return _lastKnownGain;
+                }
                 if (_camera != null) {
                     try {
                         PropertyValue value = GetPropertyValue(PROPID_ISO);
@@ -332,6 +535,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 if (_camera != null) {
                     try {
                         if (!Gains.Contains(value)) throw new ArgumentOutOfRangeException(nameof(value), "Select a supported manual ISO value.");
+                        _requestedGain = value;
+                        if (_reopenNeeded) {
+                            // Applied once the camera has been reopened (see RestoreRequestedGain).
+                            return;
+                        }
                         _driver.SetProperty(_camera.Handle, PROPID_ISO, (uint)value);
                         RaisePropertyChanged(nameof(Gain));
                     } catch (Exception ex) {
@@ -341,7 +549,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        public IList<int> Gains => GetAvailableIsoOptions().Select(option => (int)option.Value).ToList();
+        public IList<int> Gains => GetAvailableIsoOptions().Count > 0 ? _gains : new List<int>();
 
         public string Id => _device.Id == SimulatedSonyCameraBackend.DeviceId ? SimulatedSonyCameraBackend.DeviceId : "Sony";
 
@@ -360,7 +568,20 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         public bool Connected {
             get {
                 SonyCameraInfo camera = _camera;
-                return camera != null && _driver.IsOpen(camera.Handle);
+                if (camera == null) {
+                    return false;
+                }
+                if (_reopening || _driver.IsOpen(camera.Handle)) {
+                    return true;
+                }
+                // The handle was lost (e.g. USB unplugged). Stay connected so NINA keeps
+                // the camera in the sequence; the next exposure reopens it. Only report a
+                // disconnect once nothing can be reopened (a native call hung).
+                if (_driver.CanReopen) {
+                    _reopenNeeded = true;
+                    return true;
+                }
+                return false;
             }
         }
 
@@ -490,6 +711,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     _lastKnownBatteryLevel = 0;
                     try {
                         _camera = _driver.OpenCamera(_device.Id);
+                        _reopenNeeded = false;
                     } catch (Exception ex) {
                         Logger.Error(ex);
                         _camera = null;
@@ -503,6 +725,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         public void Disconnect() {
+            _stopReopenWait = true;
             lock (connectionLock) {
                 if (_camera == null) return;
                 try {
@@ -512,6 +735,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
 
                 _camera = null;
+                _reopenNeeded = false;
                 Volatile.Write(ref _lastCameraTemperature, double.NaN);
             }
             NotifyGainPropertiesChanged();
@@ -553,10 +777,37 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         public void StartExposure(CaptureSequence sequence) {
             if (!Connected) throw new SonyException("Connect a Sony camera before starting an exposure.");
+            _exposureFailed = true;   // until the capture has actually started
+            _starting = true;
+            try {
+                StartExposureCore(sequence);
+            } finally {
+                _starting = false;
+            }
+        }
+
+        private void StartExposureCore(CaptureSequence sequence) {
+            if (_reopenNeeded && !WaitForReopen()) {
+                if (_stopReopenWait) {
+                    throw new CameraExposureFailedException("Exposure cancelled while waiting for the Sony camera to come back.");
+                }
+                string message = $"The Sony camera is not responding (it may have been unplugged) and did not come back within {_reopenWait.TotalSeconds:0} s. The next exposure will wait for it again.";
+                Logger.Warning(message);
+                throw new CameraExposureFailedException(message);
+            }
             if (_camera != null) {
+                if (!WaitWhileCameraBusy()) {
+                    throw new CameraExposureFailedException("Exposure cancelled while waiting for the camera to finish the previous one.");
+                }
                 try {
+                    _currentExposureSeconds = sequence.ExposureTime;
                     _capture.Start((float)sequence.ExposureTime);
+                    _exposureFailed = false;
                 } catch (InvalidOperationException ex) {
+                    Logger.Warning(ex.Message);
+                    throw new CameraExposureFailedException(ex.Message, ex);
+                } catch (SonyException ex) {
+                    _reopenNeeded = true;
                     Logger.Warning(ex.Message);
                     throw new CameraExposureFailedException(ex.Message, ex);
                 }
@@ -568,7 +819,13 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         public void AbortExposure() {
+            // Also ends a wait for an unplugged camera to come back.
+            _stopReopenWait = true;
             if (_camera == null) {
+                return;
+            }
+            if (!_starting && (_exposureFailed || _reopenNeeded)) {
+                Logger.Debug("AbortExposure after the exposure had already failed; nothing to cancel.");
                 return;
             }
 
@@ -579,13 +836,24 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         public async Task WaitUntilExposureIsReady(CancellationToken token) {
-            using (token.Register(AbortExposure)) {
+            var limit = TimeSpan.FromSeconds(Math.Max(0, _currentExposureSeconds) * 2) + _exposureTimeoutMargin;
+            using (token.Register(AbortExposure))
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token)) {
+                timeout.CancelAfter(limit);
                 try {
-                    await _capture.WaitUntilReady(token);
+                    await _capture.WaitUntilReady(timeout.Token);
+                } catch (OperationCanceledException) when (timeout.IsCancellationRequested && !token.IsCancellationRequested) {
+                    _exposureFailed = true;
+                    _reopenNeeded = true;
+                    Logger.Error($"The Sony camera did not finish the exposure within {limit.TotalSeconds:0} s; reopening it before the next exposure.");
+                    throw new SonyException("The camera did not finish the exposure in time (see log)");
                 } catch (OperationCanceledException) {
                     Logger.Info("WaitUntilExposureIsReady cancelled.");
                     throw;
                 } catch (Exception ex) {
+                    // A failed capture is how a pulled cable usually shows up; reopen before the next one.
+                    _exposureFailed = true;
+                    _reopenNeeded = true;
                     Logger.Error("WaitUntilExposureIsReady got exception.", ex);
                     throw new SonyException("Problem while waiting for image to be ready (see log)");
                 }

@@ -178,7 +178,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 if (_connected) {
                     UInt32 hCamera = GetCameraHandle();
 
-                    if (hCamera == 0) {
+                    // While the camera is being reopened after losing USB there is briefly no
+                    // handle; stay connected so focusing works again once it is back.
+                    if (hCamera == 0 && !SonyDriver.GetInstance().IsAwaitingReopen) {
                         Logger.Debug("Sony camera was disconnected without closing focuser first, cleaning up");
                         IsConnected = false;
                         Moving = false;
