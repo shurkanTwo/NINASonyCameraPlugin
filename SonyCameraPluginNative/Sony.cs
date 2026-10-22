@@ -9,16 +9,25 @@ namespace Sony {
     // Adapted from @totoantibes's PR #13: camera and focuser share one native
     // entry point. A timeout permanently blocks further native calls, including
     // close/open/enumeration, because the old P/Invoke cannot be interrupted.
+    // Repeated native errors (e.g. USB unplugged) only drop the handle: the
+    // driver still answers, so the camera can be reopened without a restart.
     public class SonyDriver {
         private static readonly Lazy<SonyDriver> _instance = new Lazy<SonyDriver>(() => new SonyDriver());
         private static readonly NativeCallExecutor sharedCalls = new NativeCallExecutor();
         private readonly NativeCallExecutor calls;
         private readonly SonyMTPCameraDll _sonydll;
         private volatile SonyCameraInfo _camera;
+        // Handle dropped after repeated native failures but not yet closed in the
+        // native driver; it must be closed once so a reopen does not reuse it.
+        private uint lostHandle;
+        private string attachedLensPath;
         private int timeoutNotified;
         private int consecutiveFailures;
         private readonly HashSet<uint> knownGoodProperties = new HashSet<uint>();
         private const int LostCameraFailureThreshold = 3;
+        // The native close waits up to 20 s for an in-progress camera operation.
+        private const int CloseTimeoutMs = 30000;
+        private const int OpenTimeoutMs = 60000;
 
         public static SonyDriver GetInstance() => _instance.Value;
 
@@ -61,10 +70,12 @@ namespace Sony {
                     // Count only returned native errors. An unsupported property,
                     // verification mismatch or lock wait is not a lost device.
                     if (++consecutiveFailures >= LostCameraFailureThreshold) {
+                        // The driver answered, so this is not a hang: stop using the
+                        // handle, but leave it to be closed and reopened.
+                        lostHandle = handle;
                         _camera = null;
                         _sonydll.DiscardLastImage();
-                        calls.Stop();
-                        Logger.Error($"Sony camera failed {consecutiveFailures} consecutive native operations while trying to {operation}. Treating it as disconnected; restart NINA and power-cycle the camera before reconnecting.", ex);
+                        Logger.Error($"Sony camera failed {consecutiveFailures} consecutive native operations while trying to {operation}. Treating it as disconnected until it is reopened.", ex);
                     }
                     throw;
                 }
@@ -84,7 +95,62 @@ namespace Sony {
             return !calls.IsUnavailable && camera != null && camera.Handle == handle;
         }
 
+        // False only once a native call has hung; then nothing can be reopened until NINA restarts.
+        public bool CanReopen => !calls.IsUnavailable;
+
         public SonyCameraInfo OpenCamera(string path) => Invoke("open camera", () => {
+            if (lostHandle != 0) ReleaseHandle(lostHandle);
+            return OpenHandle(path);
+        }, timeoutMs: OpenTimeoutMs);
+
+        // Close the given handle (if still held, open or lost) and open the camera
+        // again, restoring the attached lens so the focuser keeps working.
+        public SonyCameraInfo ReopenCamera(uint handle, string path) => Invoke("reopen camera", () => {
+            ReleaseHandle(handle);
+            if (lostHandle != 0) ReleaseHandle(lostHandle);
+            SonyCameraInfo camera = OpenHandle(path);
+            if (attachedLensPath != null) {
+                try {
+                    _sonydll.SetAttachedLens(camera.Handle, attachedLensPath);
+                } catch (Exception ex) {
+                    Logger.Warning($"Reopened the Sony camera but could not re-attach lens '{attachedLensPath}': {ex.Message}");
+                }
+            }
+            return camera;
+        }, timeoutMs: CloseTimeoutMs + OpenTimeoutMs);
+
+        public void CloseCamera(uint handle) {
+            Invoke("close camera", () => {
+                // A deliberate close ends any pending reopen, even if the handle was already lost.
+                attachedLensPath = null;
+                if (!ReleaseHandle(handle)) {
+                    throw new SonyException("Cannot close camera: the camera handle is no longer open.");
+                }
+                return true;
+            }, timeoutMs: CloseTimeoutMs, lockTimeoutMs: 5000);
+        }
+
+        // The camera was lost (not closed) with a lens attached and can still be reopened,
+        // so the focuser should stay connected and pick up the new handle afterwards.
+        public bool IsAwaitingReopen => CanReopen && _camera == null && attachedLensPath != null;
+
+        // Runs inside Invoke. Closes a handle this driver still holds exactly once;
+        // returns false if it was never ours or has already been closed.
+        private bool ReleaseHandle(uint handle) {
+            if (_camera != null && _camera.Handle == handle) {
+                _camera = null;
+            } else if (lostHandle != 0 && lostHandle == handle) {
+                lostHandle = 0;
+            } else {
+                return false;
+            }
+            _sonydll.DiscardLastImage();
+            _sonydll.CloseDevice(handle);
+            return true;
+        }
+
+        // Runs inside Invoke.
+        private SonyCameraInfo OpenHandle(string path) {
             if (_camera != null) throw new SonyException("A Sony camera is already open. Disconnect it before opening another camera; restart NINA if the earlier disconnect timed out.");
             uint handle = _sonydll.OpenDevice(path);
             if (handle == 0 || handle == SonyMTPCameraDll.INVALID_HANDLE_VALUE) throw new SonyException("Unable to open the Sony camera.");
@@ -109,15 +175,6 @@ namespace Sony {
                 _sonydll.CloseDevice(handle);
                 throw;
             }
-        }, timeoutMs: 60000);
-
-        public void CloseCamera(uint handle) {
-            InvokeCamera(handle, "close camera", () => {
-                _camera = null;
-                _sonydll.DiscardLastImage();
-                _sonydll.CloseDevice(handle);
-                return true;
-            }, timeoutMs: 5000, lockTimeoutMs: 5000);
         }
 
         public PropertyValue GetProperty(uint handle, uint propertyId) =>
@@ -163,7 +220,7 @@ namespace Sony {
         }
 
         public void SetAttachedLens(uint handle, string path) =>
-            InvokeCamera(handle, "attach lens", () => { _sonydll.SetAttachedLens(handle, path); return true; });
+            InvokeCamera(handle, "attach lens", () => { _sonydll.SetAttachedLens(handle, path); attachedLensPath = path; return true; });
         public void SetFocusPosition(uint handle, uint position) =>
             InvokeCamera(handle, "move focus", () => { _sonydll.SetFocusPosition(handle, position); return true; });
         public uint GetFocusPosition(uint handle) =>

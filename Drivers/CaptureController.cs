@@ -147,7 +147,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             }
         }
 
-        private static bool IsBusy(uint status) {
+        internal static bool IsBusy(uint status) {
             return status == Capturing || status == Starting || status == Reading || status == Processing;
         }
     }

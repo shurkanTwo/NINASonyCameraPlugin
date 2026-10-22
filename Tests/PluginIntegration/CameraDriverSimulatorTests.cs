@@ -27,7 +27,9 @@ public class CameraDriverSimulatorTests {
         internal ushort[] DownloadedPixels;
         internal int Warnings;
 
-        internal Fixture() {
+        // Most tests use no reopen wait: one reopen attempt per exposure, as without the wait.
+        // Likewise no busy wait by default, so a busy camera is rejected at once.
+        internal Fixture(TimeSpan? reopenWait = null, TimeSpan? exposureTimeoutMargin = null, TimeSpan? busyWaitLimit = null) {
             Backend = new SimulatedSonyCameraBackend(Clock);
             Profile.SetupGet(x => x.ActiveProfile.PluginSettings).Returns(() => ActiveSettings);
             Options = new PluginOptionsAccessor(Profile.Object, SonyCamera.PluginGuid);
@@ -39,7 +41,7 @@ public class CameraDriverSimulatorTests {
                         new Mock<IImageDataFactory>().Object);
                 });
             Driver = new CameraDriver(Profile.Object, ExposureFactory.Object, Backend.Cameras().Single(), Options,
-                Backend, message => Warnings++);
+                Backend, message => Warnings++, reopenWait ?? TimeSpan.Zero, exposureTimeoutMargin, busyWaitLimit ?? TimeSpan.Zero);
         }
 
         internal void Start(double duration = 1) => Driver.StartExposure(new CaptureSequence { ExposureTime = duration });
@@ -205,6 +207,191 @@ public class CameraDriverSimulatorTests {
         await test.Driver.WaitUntilExposureIsReady(CancellationToken.None);
         await test.Driver.DownloadExposure(CancellationToken.None);
         Assert.Equal(2, test.DownloadedPixels[0]);
+    }
+
+    [Fact]
+    public async Task UnpluggedCameraStaysConnectedAndIsReopenedBeforeTheNextExposure() {
+        using var test = new Fixture();
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        test.Start();
+        test.Backend.Unplugged = true;
+        test.Finish();
+        var lost = await Assert.ThrowsAnyAsync<Exception>(() => test.Driver.WaitUntilExposureIsReady(CancellationToken.None));
+        Assert.False(lost is OperationCanceledException);
+        Assert.True(test.Driver.Connected);
+        // NINA cleans up a failed exposure with AbortExposure; that is not a user abort, so no warning.
+        test.Driver.AbortExposure();
+        Assert.Equal(0, test.Warnings);
+
+        // Still unplugged: the exposure fails quickly, NINA keeps the camera, and it is retried next time.
+        Assert.Throws<CameraExposureFailedException>(() => test.Start());
+        Assert.True(test.Driver.Connected);
+        Assert.Equal(1, test.Backend.Reopens);
+        Assert.Equal(0, test.Warnings);
+
+        test.Backend.Unplugged = false;
+        test.Start();
+        Assert.Equal(2, test.Backend.Reopens);
+        Assert.Equal(1, test.Warnings);
+        test.Finish();
+        await test.Driver.WaitUntilExposureIsReady(CancellationToken.None);
+        await test.Driver.DownloadExposure(CancellationToken.None);
+        Assert.Equal(2, test.DownloadedPixels[0]);
+
+        // Healthy again: no further reopens.
+        test.Start();
+        test.Finish();
+        await test.Driver.WaitUntilExposureIsReady(CancellationToken.None);
+        Assert.Equal(2, test.Backend.Reopens);
+    }
+
+    [Fact]
+    public async Task ExposureWaitsForAnUnpluggedCameraToComeBackInsteadOfFailing() {
+        using var test = new Fixture(reopenWait: TimeSpan.FromSeconds(30));
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        Assert.Equal(400, test.Driver.Gain);   // NINA polls this, so a last-known value exists
+        test.Backend.Unplugged = true;
+        // The exposure that discovers the loss fails...
+        Assert.Throws<CameraExposureFailedException>(() => test.Start());
+        Assert.Equal(400, test.Driver.Gain);
+        test.Driver.Gain = 1600;
+
+        // ...but the next one waits for the camera rather than failing straight away.
+        var replug = Task.Run(async () => {
+            await Task.Delay(500);
+            test.Backend.Unplugged = false;
+        });
+        test.Start();
+        await replug;
+        Assert.True(test.Backend.Reopens >= 2);
+        Assert.Equal(1, test.Warnings);
+        Assert.Equal(1600, test.Driver.Gain);
+        test.Finish();
+        await test.Driver.WaitUntilExposureIsReady(CancellationToken.None);
+        await test.Driver.DownloadExposure(CancellationToken.None);
+        Assert.Equal(1, test.DownloadedPixels[0]);
+    }
+
+    [Fact]
+    public async Task GainListIsTheSameInstanceAcrossReadsReconnectsAndReopens() {
+        using var test = new Fixture();
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        var gains = test.Driver.Gains;
+        Assert.Same(gains, test.Driver.Gains);
+
+        // A reopen after losing the camera keeps the list NINA's dropdown is bound to
+        test.Backend.Unplugged = true;
+        Assert.Throws<CameraExposureFailedException>(() => test.Start());
+        test.Backend.Unplugged = false;
+        test.Start();
+        Assert.Equal(1, test.Backend.Reopens);
+        Assert.Same(gains, test.Driver.Gains);
+
+        // So does a manual disconnect and connect
+        test.Driver.Disconnect();
+        Assert.Empty(test.Driver.Gains);
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        Assert.Same(gains, test.Driver.Gains);
+    }
+
+    [Fact]
+    public async Task IsoIsRestoredOnlyOnceTheReopenedCameraReportsItsSettings() {
+        using var test = new Fixture();
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        Assert.Equal(400, test.Driver.Gain);
+        test.Backend.Unplugged = true;
+        Assert.Throws<CameraExposureFailedException>(() => test.Start());
+        test.Driver.Gain = 1600;   // NINA sets the ISO before the next exposure, while it is away
+
+        test.Backend.Unplugged = false;
+        test.Backend.IsoUnreadReadsAfterReopen = 3;
+        test.Start();
+        Assert.Equal(1, test.Backend.Reopens);
+        Assert.Equal(1600, test.Driver.Gain);
+    }
+
+    [Fact]
+    public async Task AnExposureThatNeverFinishesTimesOutAndTheCameraIsReopenedBeforeTheNext() {
+        using var test = new Fixture(exposureTimeoutMargin: TimeSpan.FromMilliseconds(300));
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        // The simulated clock is never advanced, so this exposure never completes.
+        test.Start(0.01);
+        var error = await Assert.ThrowsAnyAsync<Exception>(() => test.Driver.WaitUntilExposureIsReady(CancellationToken.None));
+        Assert.False(error is OperationCanceledException);
+        Assert.Contains("in time", error.Message);
+        Assert.Equal(0, test.Backend.Reopens);
+        test.Start();
+        Assert.Equal(1, test.Backend.Reopens);
+        test.Finish();
+        await test.Driver.WaitUntilExposureIsReady(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task RestartWhileTheCameraFinishesAStoppedExposureWaitsInsteadOfFailing() {
+        using var test = new Fixture(busyWaitLimit: TimeSpan.FromSeconds(30));
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        // Sequence stopped mid-exposure: soft abort, the camera keeps exposing.
+        test.Start(5);
+        test.Driver.AbortExposure();
+        await Assert.ThrowsAsync<TaskCanceledException>(() => test.Driver.WaitUntilExposureIsReady(CancellationToken.None));
+
+        // Restarted straight away: the next exposure waits for the camera instead of failing.
+        var finish = Task.Run(async () => {
+            await Task.Delay(500);
+            test.Finish(6);
+        });
+        test.Start(1);
+        await finish;
+        Assert.Equal(2, test.Backend.CaptureStarts);
+        test.Finish();
+        await test.Driver.WaitUntilExposureIsReady(CancellationToken.None);
+        await test.Driver.DownloadExposure(CancellationToken.None);
+        Assert.Equal(2, test.DownloadedPixels[0]);
+    }
+
+    [Fact]
+    public async Task StoppingWhileWaitingForABusyCameraDoesNotStartAnotherExposure() {
+        using var test = new Fixture(busyWaitLimit: TimeSpan.FromSeconds(30));
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        test.Start(5);
+        test.Driver.AbortExposure();
+        await Assert.ThrowsAsync<TaskCanceledException>(() => test.Driver.WaitUntilExposureIsReady(CancellationToken.None));
+
+        var waiting = Task.Run(() => Assert.Throws<CameraExposureFailedException>(() => test.Start(1)));
+        await Task.Delay(300);
+        test.Driver.AbortExposure();
+        await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, test.Backend.CaptureStarts);
+    }
+
+    [Fact]
+    public async Task AbortEndsTheWaitForAnUnpluggedCamera() {
+        using var test = new Fixture(reopenWait: TimeSpan.FromSeconds(30));
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        test.Backend.Unplugged = true;
+        Assert.Throws<CameraExposureFailedException>(() => test.Start());
+
+        var waiting = Task.Run(() => Assert.Throws<CameraExposureFailedException>(() => test.Start()));
+        await Task.Delay(300);
+        test.Driver.AbortExposure();
+        await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(test.Driver.Connected);
+    }
+
+    [Fact]
+    public async Task DisconnectWhileUnpluggedCleansUpAndAManualConnectWorksOnceBack() {
+        using var test = new Fixture();
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        test.Backend.Unplugged = true;
+        Assert.Throws<CameraExposureFailedException>(() => test.Start());
+        test.Driver.Disconnect();
+        Assert.False(test.Driver.Connected);
+        Assert.False(await test.Driver.Connect(CancellationToken.None));
+        test.Backend.Unplugged = false;
+        Assert.True(await test.Driver.Connect(CancellationToken.None));
+        Assert.Equal(0, test.Backend.Reopens);
+        test.Start();
+        Assert.Equal(0, test.Backend.Reopens);
     }
 
     [Fact]

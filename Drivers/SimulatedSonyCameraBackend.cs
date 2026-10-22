@@ -29,6 +29,14 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         public bool FailCapture { get; set; }
         public bool IgnoreNativeCancel { get; set; }
         public int StatusReadFailures { get; set; }
+        // Simulates the USB cable being pulled: the handle still looks open, but
+        // every camera call fails and the camera cannot be opened until plugged back in.
+        public bool Unplugged { get; set; }
+        public int Reopens { get; private set; }
+        // After a reopen the camera reports ISO 0 for this many reads; setting the ISO in that
+        // window lands on the wrong value, as the real camera's relative ISO steps do.
+        public int IsoUnreadReadsAfterReopen { get; set; }
+        private int isoUnreadReads;
         public int NativeCancelCalls { get; private set; }
         public int CaptureStarts { get; private set; }
 
@@ -57,6 +65,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             lock (cameraLock) {
                 if (id != DeviceId) {
                     throw new InvalidOperationException("Unknown simulated camera.");
+                }
+                if (Unplugged) {
+                    throw new InvalidOperationException("Simulated camera is unplugged.");
                 }
                 if (connected) {
                     throw new InvalidOperationException("Simulated camera is already connected.");
@@ -87,9 +98,28 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             lock (cameraLock) return connected && cameraHandle == handle;
         }
 
+        public bool CanReopen => true;
+
+        public SonyCameraInfo ReopenCamera(uint cameraHandle, string id) {
+            lock (cameraLock) {
+                Reopens++;
+                if (connected && cameraHandle == handle) {
+                    connected = false;
+                    captureActive = false;
+                    lastImage = null;
+                }
+                SonyCameraInfo camera = OpenCamera(id);
+                isoUnreadReads = IsoUnreadReadsAfterReopen;
+                return camera;
+            }
+        }
+
         public void CloseCamera(uint cameraHandle) {
             lock (cameraLock) {
-                RequireConnection(cameraHandle);
+                // Like the native driver, closing works even while the camera is unplugged.
+                if (!connected || cameraHandle != handle) {
+                    throw new InvalidOperationException("Simulated camera is disconnected or the handle is invalid.");
+                }
                 connected = false;
                 captureActive = false;
                 lastImage = null;
@@ -99,6 +129,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         public PropertyValue GetProperty(uint cameraHandle, uint propertyId) {
             lock (cameraLock) {
                 RequireConnection(cameraHandle);
+                if (propertyId == IsoProperty && isoUnreadReads > 0) {
+                    isoUnreadReads--;
+                    return new PropertyValue { Id = propertyId, Value = 0 };
+                }
                 return propertyId switch {
                     IsoProperty => new PropertyValue { Id = propertyId, Value = iso },
                     BatteryProperty => new PropertyValue { Id = propertyId, Value = 100 },
@@ -114,7 +148,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     value != 800 && value != 1600 && value != 3200)) {
                     throw new InvalidOperationException("Unsupported simulated ISO value.");
                 }
-                iso = value;
+                // Stepping from an unread ISO lands one step off
+                iso = isoUnreadReads > 0 ? (value == 100 ? 200u : 100u) : value;
             }
         }
 
@@ -212,6 +247,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private void RequireConnection(uint cameraHandle) {
             if (!connected || cameraHandle != handle) {
                 throw new InvalidOperationException("Simulated camera is disconnected or the handle is invalid.");
+            }
+            if (Unplugged) {
+                throw new InvalidOperationException("Simulated camera is unplugged.");
             }
         }
     }
