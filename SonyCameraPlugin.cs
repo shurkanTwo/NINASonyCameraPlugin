@@ -147,13 +147,14 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera {
 
         /// <summary>
         /// Quiet gap enforced between captures, in milliseconds; 0 disables it.
-        /// Off by default, like the other guards here, because the value that
-        /// suits a camera has to be measured rather than assumed.
+        /// Only exposures shorter than the gap wait for it, so light frames are
+        /// unaffected and the cost falls on flats and bias, where the wedge
+        /// happens.
         /// </summary>
         public int MinCaptureIntervalMs {
             get {
-                var raw = pluginSettings.GetValueString(nameof(MinCaptureIntervalMs), "0");
-                return int.TryParse(raw, out var ms) && ms > 0 ? ms : 0;
+                var raw = pluginSettings.GetValueString(nameof(MinCaptureIntervalMs), "4000");
+                return int.TryParse(raw, out var ms) && ms >= 0 ? ms : 4000;
             }
             set {
                 pluginSettings.SetValueString(nameof(MinCaptureIntervalMs), Math.Max(0, value).ToString());

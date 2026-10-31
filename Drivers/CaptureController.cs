@@ -60,13 +60,26 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         /// <summary>
         /// Holds a start off until the camera has had a quiet gap since the last
-        /// capture ended. Deliberately outside <see cref="captureLock"/>: holding
-        /// that here would make every concurrent <see cref="Abort"/> fall back to
-        /// a soft cancel for the length of the wait.
+        /// capture ended.
+        /// <para>
+        /// Only exposures shorter than the gap wait. A frame that already takes
+        /// longer than the gap has given the camera that much time anyway, and
+        /// charging it again would cost real sky: 4s added to every 30s sub is a
+        /// seventh of the night. The wedge is a short-exposure failure - flats and
+        /// bias - so that is where the wait belongs.
+        /// </para>
+        /// <para>
+        /// Deliberately outside <see cref="captureLock"/>: holding that here would
+        /// make every concurrent <see cref="Abort"/> fall back to a soft cancel for
+        /// the length of the wait.
+        /// </para>
         /// </summary>
-        private void WaitForQuietGap() {
+        private void WaitForQuietGap(float exposureTime) {
             int required = Math.Max(0, minCaptureIntervalMs());
             if (required == 0 || !haveCaptureEnd) {
+                return;
+            }
+            if (exposureTime * 1000.0 >= required) {
                 return;
             }
             while (true) {
@@ -85,7 +98,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         internal void Start(float exposureTime) {
-            WaitForQuietGap();
+            WaitForQuietGap(exposureTime);
             lock (captureLock) {
                 var request = new CaptureRequest();
                 lock (requestLock) {

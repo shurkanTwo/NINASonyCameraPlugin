@@ -14,7 +14,7 @@
                       IsChecked="{Binding EnableNativeCancel, Mode=TwoWay}" />
 
             <TextBlock Text="Quiet gap between captures" FontSize="14" FontWeight="SemiBold" Margin="0,12,0,4" />
-            <TextBlock Text="Wait this long after one exposure finishes before starting the next, in milliseconds. Some cameras stop responding when short exposures are taken back to back: the camera reports a capture still running and every later exposure is refused until it is reconnected. Flat frames are where this usually shows up. 0 disables the wait; raise it only as far as the camera needs." TextWrapping="Wrap" Opacity="0.7" Margin="0,0,0,8"/>
+            <TextBlock Text="Wait this long after one exposure finishes before starting the next, in milliseconds. Some cameras stop responding when short exposures are taken back to back: the camera reports a capture still running and every later exposure is refused until it is reconnected. Flat and bias frames are where this shows up. Only exposures shorter than this wait are delayed, so light frames are unaffected. 0 disables it." TextWrapping="Wrap" Opacity="0.7" Margin="0,0,0,8"/>
             <TextBox Width="80"
                      HorizontalAlignment="Left"
                      Text="{Binding MinCaptureIntervalMs, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />

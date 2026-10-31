@@ -33,6 +33,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // Live view reads used to clear a wedged capture, and the gap between
         // them. Three short reads is what clears it by hand; more would only
         // delay the start that follows.
+        // Quiet gap applied between captures whose exposure is shorter than it.
+        private const int DEFAULT_CAPTURE_INTERVAL_MS = 4000;
+
         private const int LIVEVIEW_RECOVERY_READS = 3;
         private const int LIVEVIEW_RECOVERY_READ_GAP_MS = 400;
 
@@ -120,15 +123,21 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         /// before it succeeded at 0.0078s and 0.0157s - the difference being that
         /// the search's steps were seconds apart.
         /// </para>
+        /// <para>
+        /// Only exposures shorter than the gap wait for it, so light frames are
+        /// unaffected. The default is deliberately generous rather than measured:
+        /// it costs nothing on a 30s sub and a few seconds across a flat run,
+        /// where a wedged camera costs the whole sequence.
+        /// </para>
         /// </summary>
         private int MinCaptureIntervalMs {
             get {
                 try {
-                    var raw = _pluginSettings.GetValueString(nameof(SonyCamera.MinCaptureIntervalMs), "0");
-                    return int.TryParse(raw, out var ms) && ms > 0 ? ms : 0;
+                    var raw = _pluginSettings.GetValueString(nameof(SonyCamera.MinCaptureIntervalMs), DEFAULT_CAPTURE_INTERVAL_MS.ToString());
+                    return int.TryParse(raw, out var ms) && ms >= 0 ? ms : DEFAULT_CAPTURE_INTERVAL_MS;
                 } catch (Exception ex) {
-                    Logger.Warning($"MinCaptureIntervalMs read failed; defaulting to 0. {ex.Message}");
-                    return 0;
+                    Logger.Warning($"MinCaptureIntervalMs read failed; defaulting to {DEFAULT_CAPTURE_INTERVAL_MS}. {ex.Message}");
+                    return DEFAULT_CAPTURE_INTERVAL_MS;
                 }
             }
         }

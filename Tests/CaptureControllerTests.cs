@@ -114,11 +114,11 @@ public class CaptureControllerTests {
     [Fact]
     public async Task AQuietGapIsWaitedOutBeforeTheNextCapture() {
         var camera = new Camera { MinIntervalMs = 750 };
-        camera.Capture.Start(1);
+        camera.Capture.Start(0.01f);
         camera.Status = 4;
         await camera.Capture.WaitUntilReady(CancellationToken.None);
         camera.Status = 4;
-        camera.Capture.Start(1);
+        camera.Capture.Start(0.01f);
         Assert.InRange(camera.SleptMs, 750, 800);
         Assert.Equal(2, camera.Starts);
     }
@@ -134,13 +134,48 @@ public class CaptureControllerTests {
     [Fact]
     public async Task TimeAlreadyElapsedCountsTowardsTheGap() {
         var camera = new Camera { MinIntervalMs = 1000 };
-        camera.Capture.Start(1);
+        camera.Capture.Start(0.01f);
         camera.Status = 4;
         await camera.Capture.WaitUntilReady(CancellationToken.None);
         camera.Clock.Advance(TimeSpan.FromMilliseconds(900));
         camera.Status = 4;
-        camera.Capture.Start(1);
+        camera.Capture.Start(0.01f);
         Assert.InRange(camera.SleptMs, 100, 150);
+    }
+
+    [Fact]
+    public async Task AnExposureLongerThanTheGapIsNotDelayed() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(30);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(30);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public async Task AnExposureExactlyTheLengthOfTheGapIsNotDelayed() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(4);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(4);
+        Assert.Equal(0, camera.SleptMs);
+    }
+
+    [Fact]
+    public async Task AnExposureShorterThanTheGapWaits() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(0.01f);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(0.01f);
+        Assert.InRange(camera.SleptMs, 4000, 4050);
+        Assert.Equal(2, camera.Starts);
     }
 
     [Fact]
