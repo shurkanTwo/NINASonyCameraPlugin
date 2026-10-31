@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
 using NINA.RetroKiwi.Plugin.SonyCamera.Drivers;
@@ -62,6 +62,13 @@ public class CaptureControllerTests {
         internal Action BeforeReadNativeCancel;
         internal Func<uint> ReadStatus;
         internal readonly CaptureController Capture;
+        // Quiet-gap and recovery instrumentation. Defaults leave the controller
+        // behaving exactly as it did before either was added.
+        internal int MinIntervalMs;
+        internal int SleptMs;
+        internal int RecoveryAttempts;
+        internal Func<bool> Recover;
+        internal readonly ManualTimeProvider Clock = new ManualTimeProvider();
 
         internal Camera() {
             Capture = new CaptureController(
@@ -79,8 +86,96 @@ public class CaptureControllerTests {
                     BeforeReadNativeCancel?.Invoke();
                     return NativeCancelEnabled;
                 },
-                cancelLockTimeoutMs: 20);
+                cancelLockTimeoutMs: 20,
+                minCaptureIntervalMs: () => MinIntervalMs,
+                recoverStuckCapture: () => {
+                    RecoveryAttempts++;
+                    return Recover != null && Recover();
+                },
+                clock: Clock,
+                // Advance the test clock instead of really sleeping, so the wait
+                // is asserted on rather than waited out.
+                sleep: ms => { SleptMs += ms; Clock.Advance(TimeSpan.FromMilliseconds(ms)); });
         }
+    }
+
+    [Fact]
+    public async Task NoQuietGapIsWaitedWhenTheIntervalIsZero() {
+        var camera = new Camera();
+        camera.Capture.Start(1);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(1);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public async Task AQuietGapIsWaitedOutBeforeTheNextCapture() {
+        var camera = new Camera { MinIntervalMs = 750 };
+        camera.Capture.Start(1);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(1);
+        Assert.InRange(camera.SleptMs, 750, 800);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public void TheFirstCaptureIsNeverDelayed() {
+        var camera = new Camera { MinIntervalMs = 5000 };
+        camera.Capture.Start(1);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(1, camera.Starts);
+    }
+
+    [Fact]
+    public async Task TimeAlreadyElapsedCountsTowardsTheGap() {
+        var camera = new Camera { MinIntervalMs = 1000 };
+        camera.Capture.Start(1);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Clock.Advance(TimeSpan.FromMilliseconds(900));
+        camera.Status = 4;
+        camera.Capture.Start(1);
+        Assert.InRange(camera.SleptMs, 100, 150);
+    }
+
+    [Fact]
+    public void RecoveryThatClearsAStuckCaptureLetsTheStartProceed() {
+        var camera = new Camera { Status = 1 };
+        camera.Recover = () => { camera.Status = 4; return true; };
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.RecoveryAttempts);
+        Assert.Equal(1, camera.Starts);
+    }
+
+    [Fact]
+    public void RecoveryThatFailsStillRejectsTheStart() {
+        var camera = new Camera { Status = 1 };
+        camera.Recover = () => false;
+        Assert.Throws<InvalidOperationException>(() => camera.Capture.Start(1));
+        Assert.Equal(1, camera.RecoveryAttempts);
+        Assert.Equal(0, camera.Starts);
+    }
+
+    [Fact]
+    public void RecoveryThatReportsSuccessButLeavesItBusyStillRejectsTheStart() {
+        var camera = new Camera { Status = 1 };
+        camera.Recover = () => true;   // claims success, status stays capturing
+        Assert.Throws<InvalidOperationException>(() => camera.Capture.Start(1));
+        Assert.Equal(1, camera.RecoveryAttempts);
+        Assert.Equal(0, camera.Starts);
+    }
+
+    [Fact]
+    public void RecoveryIsNotAttemptedWhenTheCameraIsIdle() {
+        var camera = new Camera { Status = 4 };
+        camera.Capture.Start(1);
+        Assert.Equal(0, camera.RecoveryAttempts);
+        Assert.Equal(1, camera.Starts);
     }
 
     [Theory]

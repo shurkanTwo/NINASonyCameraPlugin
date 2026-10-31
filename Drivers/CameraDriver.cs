@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -29,6 +29,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private const uint PROPID_BATTERY = 53784;
         private const uint PROPID_ISO = 0xD21E; // Actual ISO currently set
         private const uint PROPID_ISOS = 0xFFFE; // Registry-backed list of learnt ISOs (may be empty until learnt)
+
+        // Live view reads used to clear a wedged capture, and the gap between
+        // them. Three short reads is what clears it by hand; more would only
+        // delay the start that follows.
+        private const int LIVEVIEW_RECOVERY_READS = 3;
+        private const int LIVEVIEW_RECOVERY_READ_GAP_MS = 400;
 
         private readonly IPluginOptionsAccessor _pluginSettings;
         private readonly ISonyCameraBackend _driver;
@@ -62,7 +68,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 },
                 exposureTime => _driver.StartCapture(_camera.Handle, exposureTime),
                 TryNativeCancel,
-                () => NativeCancelEnabled);
+                () => NativeCancelEnabled,
+                minCaptureIntervalMs: () => MinCaptureIntervalMs,
+                recoverStuckCapture: TryLiveViewRecovery);
         }
 
         #region Internal Helpers
@@ -101,6 +109,59 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             RaisePropertyChanged(nameof(GainMax));
             RaisePropertyChanged(nameof(Gain));
             RaisePropertyChanged(nameof(Gains));
+        }
+
+        /// <summary>
+        /// Quiet gap enforced between captures, in milliseconds. 0 disables it.
+        /// <para>
+        /// Back-to-back short exposures leave the camera reporting capturing (1)
+        /// forever, and every later start is then refused. A flat run at 0.01174s
+        /// wedged on its first frame, while the exposure search immediately
+        /// before it succeeded at 0.0078s and 0.0157s - the difference being that
+        /// the search's steps were seconds apart.
+        /// </para>
+        /// </summary>
+        private int MinCaptureIntervalMs {
+            get {
+                try {
+                    var raw = _pluginSettings.GetValueString(nameof(SonyCamera.MinCaptureIntervalMs), "0");
+                    return int.TryParse(raw, out var ms) && ms > 0 ? ms : 0;
+                } catch (Exception ex) {
+                    Logger.Warning($"MinCaptureIntervalMs read failed; defaulting to 0. {ex.Message}");
+                    return 0;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Clears a capture the camera has left stuck, by asking for live view
+        /// briefly and then releasing it.
+        /// <para>
+        /// The alternative is a native cancel, which is off by default because it
+        /// crashes the driver. Live view is a read the driver already supports and
+        /// clears the state in practice, so a wedged camera no longer needs a
+        /// disconnect and reconnect to take another frame.
+        /// </para>
+        /// <para>Returns whether live view was reached at all; the caller re-reads
+        /// the capture status either way.</para>
+        /// </summary>
+        private bool TryLiveViewRecovery() {
+            var camera = _camera;
+            if (camera == null) {
+                return false;
+            }
+            Logger.Warning("Camera reports a capture still running with nothing of ours in flight; trying live view to clear it.");
+            try {
+                for (int attempt = 0; attempt < LIVEVIEW_RECOVERY_READS; attempt++) {
+                    _driver.GetLiveView(camera.Handle);
+                    Thread.Sleep(LIVEVIEW_RECOVERY_READ_GAP_MS);
+                }
+                Logger.Info("Live view completed; re-reading the capture status.");
+                return true;
+            } catch (Exception ex) {
+                Logger.Warning($"Live view recovery failed; leaving the capture status as it is. {ex.Message}");
+                return false;
+            }
         }
 
         private bool NativeCancelEnabled {

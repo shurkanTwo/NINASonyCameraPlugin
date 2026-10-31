@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -24,6 +24,19 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private readonly Func<bool> cancelCapture;
         private readonly Func<bool> nativeCancelEnabled;
         private readonly int cancelLockTimeoutMs;
+        // Back-to-back short exposures wedge the camera: it reports capturing (1)
+        // and never leaves, so every later start is refused until a reconnect.
+        // Observed on a7S flat runs at 0.01174s; the exposure search just before
+        // them succeeded only because its steps happened to be ~9s apart.
+        private readonly Func<int> minCaptureIntervalMs;
+        // Clears a wedged capture without a reconnect. A brief LiveView does it;
+        // the native cancel that would otherwise be needed is off by default
+        // because it crashes the driver.
+        private readonly Func<bool> recoverStuckCapture;
+        private readonly TimeProvider clock;
+        private readonly Action<int> sleep;
+        private long lastCaptureEndTimestamp;
+        private bool haveCaptureEnd;
         private sealed class CaptureRequest {
             internal int CancelRequested;
         }
@@ -31,15 +44,48 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private CaptureRequest pendingRequest;
 
         internal CaptureController(Func<uint> getStatus, Action<float> startCapture,
-            Func<bool> cancelCapture, Func<bool> nativeCancelEnabled, int cancelLockTimeoutMs = 1000) {
+            Func<bool> cancelCapture, Func<bool> nativeCancelEnabled, int cancelLockTimeoutMs = 1000,
+            Func<int> minCaptureIntervalMs = null, Func<bool> recoverStuckCapture = null,
+            TimeProvider clock = null, Action<int> sleep = null) {
             this.getStatus = getStatus;
             this.startCapture = startCapture;
             this.cancelCapture = cancelCapture;
             this.nativeCancelEnabled = nativeCancelEnabled;
             this.cancelLockTimeoutMs = cancelLockTimeoutMs;
+            this.minCaptureIntervalMs = minCaptureIntervalMs ?? (() => 0);
+            this.recoverStuckCapture = recoverStuckCapture;
+            this.clock = clock ?? TimeProvider.System;
+            this.sleep = sleep ?? Thread.Sleep;
+        }
+
+        /// <summary>
+        /// Holds a start off until the camera has had a quiet gap since the last
+        /// capture ended. Deliberately outside <see cref="captureLock"/>: holding
+        /// that here would make every concurrent <see cref="Abort"/> fall back to
+        /// a soft cancel for the length of the wait.
+        /// </summary>
+        private void WaitForQuietGap() {
+            int required = Math.Max(0, minCaptureIntervalMs());
+            if (required == 0 || !haveCaptureEnd) {
+                return;
+            }
+            while (true) {
+                double waited = clock.GetElapsedTime(lastCaptureEndTimestamp).TotalMilliseconds;
+                int remaining = required - (int)waited;
+                if (remaining <= 0) {
+                    return;
+                }
+                sleep(Math.Min(remaining, 50));
+            }
+        }
+
+        private void MarkCaptureEnded() {
+            lastCaptureEndTimestamp = clock.GetTimestamp();
+            haveCaptureEnd = true;
         }
 
         internal void Start(float exposureTime) {
+            WaitForQuietGap();
             lock (captureLock) {
                 var request = new CaptureRequest();
                 lock (requestLock) {
@@ -47,6 +93,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 }
                 try {
                     uint status = getStatus();
+                    if (IsBusy(status) && recoverStuckCapture != null && recoverStuckCapture()) {
+                        // Recovery is attempted once and then re-read: a capture
+                        // that is genuinely still running stays busy and is
+                        // rejected below, exactly as before.
+                        status = getStatus();
+                    }
                     if (IsBusy(status)) {
                         throw new InvalidOperationException("Cannot start exposure: camera is still busy with a previous exposure.");
                     }
@@ -123,10 +175,13 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
                 switch (status) {
                     case Complete:
+                        MarkCaptureEnded();
                         return;
                     case Cancelled:
+                        MarkCaptureEnded();
                         throw new TaskCanceledException("Exposure cancelled by camera.");
                     case Failed:
+                        MarkCaptureEnded();
                         throw new InvalidOperationException("Camera capture failed.");
                     case Created:
                     case Capturing:
