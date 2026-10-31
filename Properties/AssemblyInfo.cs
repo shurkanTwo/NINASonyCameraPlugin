@@ -1,4 +1,4 @@
-using Microsoft.VisualBasic;
+﻿using Microsoft.VisualBasic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -8,6 +8,11 @@ using System.Runtime.InteropServices;
 
 // [MANDATORY] The assembly versioning
 //Should be incremented for each new release build of a plugin
+// Left at 1.0.0.5 deliberately. A fifth component ("1.0.0.5.1") was tried to
+// tell this build apart from the other 1.0.0.5 builds in NINA's plugin list,
+// and NINA refused to load the assembly at all: it parses the version with
+// System.Version, which takes at most four parts, and reported "Version string
+// portion was too short or too long". Tell the builds apart by file size.
 [assembly: AssemblyVersion("1.0.0.5")]
 [assembly: AssemblyFileVersion("1.0.0.5")]
 

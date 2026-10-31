@@ -73,7 +73,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 TryNativeCancel,
                 () => NativeCancelEnabled,
                 minCaptureIntervalMs: () => MinCaptureIntervalMs,
-                recoverStuckCapture: TryLiveViewRecovery);
+                recoverStuckCapture: TryLiveViewRecovery,
+                onWaited: ms => Logger.Info($"Waited {ms}ms before this exposure: the previous one ended less than {MinCaptureIntervalMs}ms ago and this exposure is shorter than that."));
         }
 
         #region Internal Helpers

@@ -66,6 +66,8 @@ public class CaptureControllerTests {
         // behaving exactly as it did before either was added.
         internal int MinIntervalMs;
         internal int SleptMs;
+        internal int WaitsReported;
+        internal int LastWaitReportedMs;
         internal int RecoveryAttempts;
         internal Func<bool> Recover;
         internal readonly ManualTimeProvider Clock = new ManualTimeProvider();
@@ -95,7 +97,8 @@ public class CaptureControllerTests {
                 clock: Clock,
                 // Advance the test clock instead of really sleeping, so the wait
                 // is asserted on rather than waited out.
-                sleep: ms => { SleptMs += ms; Clock.Advance(TimeSpan.FromMilliseconds(ms)); });
+                sleep: ms => { SleptMs += ms; Clock.Advance(TimeSpan.FromMilliseconds(ms)); },
+                onWaited: ms => { WaitsReported++; LastWaitReportedMs = ms; });
         }
     }
 
@@ -176,6 +179,29 @@ public class CaptureControllerTests {
         camera.Capture.Start(0.01f);
         Assert.InRange(camera.SleptMs, 4000, 4050);
         Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public async Task AWaitThatHappensIsReportedOnce() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(0.01f);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(0.01f);
+        Assert.Equal(1, camera.WaitsReported);
+        Assert.InRange(camera.LastWaitReportedMs, 4000, 4050);
+    }
+
+    [Fact]
+    public async Task NoWaitIsReportedWhenNoneWasNeeded() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(30);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(30);
+        Assert.Equal(0, camera.WaitsReported);
     }
 
     [Fact]

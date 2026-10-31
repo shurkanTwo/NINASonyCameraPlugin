@@ -35,6 +35,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private readonly Func<bool> recoverStuckCapture;
         private readonly TimeProvider clock;
         private readonly Action<int> sleep;
+        // Reports a wait that actually happened, so the guard is visible in the
+        // log instead of having to be inferred from capture timestamps.
+        private readonly Action<int> onWaited;
         private long lastCaptureEndTimestamp;
         private bool haveCaptureEnd;
         private sealed class CaptureRequest {
@@ -46,7 +49,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         internal CaptureController(Func<uint> getStatus, Action<float> startCapture,
             Func<bool> cancelCapture, Func<bool> nativeCancelEnabled, int cancelLockTimeoutMs = 1000,
             Func<int> minCaptureIntervalMs = null, Func<bool> recoverStuckCapture = null,
-            TimeProvider clock = null, Action<int> sleep = null) {
+            TimeProvider clock = null, Action<int> sleep = null, Action<int> onWaited = null) {
             this.getStatus = getStatus;
             this.startCapture = startCapture;
             this.cancelCapture = cancelCapture;
@@ -56,6 +59,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             this.recoverStuckCapture = recoverStuckCapture;
             this.clock = clock ?? TimeProvider.System;
             this.sleep = sleep ?? Thread.Sleep;
+            this.onWaited = onWaited;
         }
 
         /// <summary>
@@ -82,13 +86,19 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             if (exposureTime * 1000.0 >= required) {
                 return;
             }
+            int slept = 0;
             while (true) {
                 double waited = clock.GetElapsedTime(lastCaptureEndTimestamp).TotalMilliseconds;
                 int remaining = required - (int)waited;
                 if (remaining <= 0) {
-                    return;
+                    break;
                 }
-                sleep(Math.Min(remaining, 50));
+                int slice = Math.Min(remaining, 50);
+                sleep(slice);
+                slept += slice;
+            }
+            if (slept > 0) {
+                onWaited?.Invoke(slept);
             }
         }
 
