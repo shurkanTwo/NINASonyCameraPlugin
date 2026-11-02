@@ -64,7 +64,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
 
         /// <summary>
         /// Holds a start off until the camera has had a quiet gap since the last
-        /// capture ended.
+        /// image came off it - see <see cref="MarkImageRetrieved"/> for why that
+        /// is the moment that matters rather than the end of the exposure.
         /// <para>
         /// Only exposures shorter than the gap wait. A frame that already takes
         /// longer than the gap has given the camera that much time anyway, and
@@ -105,6 +106,36 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private void MarkCaptureEnded() {
             lastCaptureEndTimestamp = clock.GetTimestamp();
             haveCaptureEnd = true;
+        }
+
+        /// <summary>
+        /// Records that the image has been pulled off the camera, which is the
+        /// point the quiet gap has to be measured from.
+        /// <para>
+        /// The exposure completing and the image leaving the camera are two
+        /// different moments, and NINA drives them through two separate calls:
+        /// the status reaches Complete in <see cref="WaitUntilReady"/>, and the
+        /// 12.4MB retrieval only starts afterwards, in the driver's
+        /// DownloadExposure. Timing the gap from Complete therefore spends it
+        /// while the transfer is still running, so the next shutter release
+        /// lands on top of a download the native driver has to clean up - after
+        /// which the camera sometimes never announces the new image at all and
+        /// only a reconnect clears it.
+        /// </para>
+        /// <para>
+        /// Measured on an a7S at 0.0125s: the retrieval began at 13:08:38.495
+        /// and was still being polled at 13:08:42.669, by which time the 4s gap
+        /// timed from Complete had already released the next frame. One frame of
+        /// ten survived.
+        /// </para>
+        /// <para>
+        /// The Complete, Cancelled and Failed marks in <see cref="WaitUntilReady"/>
+        /// stay as a floor, so a frame NINA abandons without downloading still
+        /// records an end and the gap is never skipped altogether.
+        /// </para>
+        /// </summary>
+        internal void MarkImageRetrieved() {
+            MarkCaptureEnded();
         }
 
         internal void Start(float exposureTime) {

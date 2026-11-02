@@ -666,7 +666,19 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         public Task<IExposureData> DownloadExposure(CancellationToken token) {
             return Task.Run<IExposureData>(() => {
                 token.ThrowIfCancellationRequested();
-                SonyExposureFrame image = _driver.GetLastImage();
+                SonyExposureFrame image;
+                try {
+                    image = _driver.GetLastImage();
+                } finally {
+                    // This call is the image coming off the camera, so it is the
+                    // end of the traffic the quiet gap has to separate from the
+                    // next shutter release. Marking it here rather than when the
+                    // exposure completed is the whole point: see
+                    // CaptureController.MarkImageRetrieved. In a finally because
+                    // the camera is done either way, and a stale timestamp would
+                    // let the next frame start immediately.
+                    _capture.MarkImageRetrieved();
+                }
                 var metaData = new ImageMetaData();
                 double temperature = image.Pixels == null ? SonyCameraTemperature.Read(image.RawBytes) : double.NaN;
                 metaData.Camera.Temperature = temperature;

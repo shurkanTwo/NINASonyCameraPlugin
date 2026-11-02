@@ -181,6 +181,42 @@ public class CaptureControllerTests {
         Assert.Equal(2, camera.Starts);
     }
 
+    // The gap exists to keep the next shutter release off the previous frame's
+    // download. The exposure ending and the image coming off the camera are
+    // different moments: on an a7S the 12.4MB retrieval was still being polled
+    // 4.17s after it started, so a gap timed from the exposure ending is spent
+    // entirely inside the transfer and protects nothing.
+    [Fact]
+    public async Task TheGapIsMeasuredFromTheImageRetrievalNotFromTheExposureEnding() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(0.01f);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+
+        // The whole gap elapses while the image is still being pulled off the
+        // camera, which is exactly the case that used to skip the wait.
+        camera.Clock.Advance(TimeSpan.FromMilliseconds(4000));
+        camera.Capture.MarkImageRetrieved();
+
+        camera.Status = 4;
+        camera.Capture.Start(0.01f);
+        Assert.InRange(camera.SleptMs, 4000, 4050);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public async Task ALongExposureIsStillNotDelayedOnceTheImageIsRetrieved() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(30);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Capture.MarkImageRetrieved();
+        camera.Status = 4;
+        camera.Capture.Start(30);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(2, camera.Starts);
+    }
+
     [Fact]
     public async Task AWaitThatHappensIsReportedOnce() {
         var camera = new Camera { MinIntervalMs = 4000 };
