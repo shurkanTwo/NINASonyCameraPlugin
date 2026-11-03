@@ -74,7 +74,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 () => NativeCancelEnabled,
                 minCaptureIntervalMs: () => MinCaptureIntervalMs,
                 recoverStuckCapture: TryLiveViewRecovery,
-                onWaited: ms => Logger.Info($"Waited {ms}ms before this exposure: the previous one ended less than {MinCaptureIntervalMs}ms ago and this exposure is shorter than that."));
+                onWaited: ms => Logger.Info($"Waited {ms}ms before this exposure: the previous one ended less than {MinCaptureIntervalMs}ms ago and this exposure is shorter than that."),
+                onAbortDecision: why => Logger.Info($"Abort decision: {why}."));
         }
 
         #region Internal Helpers
@@ -643,7 +644,14 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 return;
             }
 
-            if (_capture.Abort() == CaptureController.AbortResult.SoftCancelRequested) {
+            // Every outcome is logged, not only the soft one. A capture nothing
+            // ever cancels is what turns a lost frame into a lost session, so
+            // the log has to say which of the three happened without having to
+            // be inferred from what follows.
+            var result = _capture.Abort();
+            Logger.Info($"AbortExposure outcome: {result}.");
+
+            if (result == CaptureController.AbortResult.SoftCancelRequested) {
                 _showWarning("Abort requested. The camera will finish the current exposure before another can start. Native cancellation is disabled or unavailable.");
                 Logger.Info("AbortExposure requested; native cancel unavailable; letting capture finish.");
             }

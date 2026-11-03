@@ -38,6 +38,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // Reports a wait that actually happened, so the guard is visible in the
         // log instead of having to be inferred from capture timestamps.
         private readonly Action<int> onWaited;
+        // Reports why an abort took the path it did. Abort has six exits and the
+        // log said only "native cancel unavailable" for all of them, which left
+        // a disabled setting and a contended lock indistinguishable - and a
+        // capture that nothing ever cancels is what ends a night.
+        private readonly Action<string> onAbortDecision;
         private long lastCaptureEndTimestamp;
         private bool haveCaptureEnd;
         private sealed class CaptureRequest {
@@ -49,7 +54,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         internal CaptureController(Func<uint> getStatus, Action<float> startCapture,
             Func<bool> cancelCapture, Func<bool> nativeCancelEnabled, int cancelLockTimeoutMs = 1000,
             Func<int> minCaptureIntervalMs = null, Func<bool> recoverStuckCapture = null,
-            TimeProvider clock = null, Action<int> sleep = null, Action<int> onWaited = null) {
+            TimeProvider clock = null, Action<int> sleep = null, Action<int> onWaited = null,
+            Action<string> onAbortDecision = null) {
             this.getStatus = getStatus;
             this.startCapture = startCapture;
             this.cancelCapture = cancelCapture;
@@ -60,6 +66,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             this.clock = clock ?? TimeProvider.System;
             this.sleep = sleep ?? Thread.Sleep;
             this.onWaited = onWaited;
+            this.onAbortDecision = onAbortDecision;
+        }
+
+        private void ReportAbort(string why) {
+            onAbortDecision?.Invoke(why);
         }
 
         /// <summary>
@@ -184,29 +195,46 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 // If preflight rejects the new request, the previous capture must
                 // still retain this abort. No native call runs under requestLock.
                 Interlocked.Exchange(ref currentRequest.CancelRequested, 1);
-                if (alreadyRequested != 0) return AbortResult.AlreadyRequested;
+                if (alreadyRequested != 0) {
+                    ReportAbort("an abort was already recorded for this exposure; nothing further sent");
+                    return AbortResult.AlreadyRequested;
+                }
             }
-            if (!nativeCancelEnabled() || !Monitor.TryEnter(captureLock, cancelLockTimeoutMs)) {
+
+            if (!nativeCancelEnabled()) {
+                ReportAbort("native cancel is turned off in the plugin options, so nothing was sent to the camera and the capture is left to finish on its own");
+                return AbortResult.SoftCancelRequested;
+            }
+            if (!Monitor.TryEnter(captureLock, cancelLockTimeoutMs)) {
+                ReportAbort($"native cancel is on, but the capture lock could not be taken within {cancelLockTimeoutMs}ms, so nothing was sent; the status poller holds that lock while it reads the driver");
                 return AbortResult.SoftCancelRequested;
             }
 
             try {
                 // An abort queued for the previous exposure must never cancel a new one.
                 if (!ReferenceEquals(request, currentRequest)) {
+                    ReportAbort("the abort belongs to an exposure that has already been superseded");
                     return AbortResult.AlreadyRequested;
                 }
                 uint status = getStatus();
                 if (status == Reading || status == Processing) {
+                    ReportAbort($"capture status is 0x{status:X4}, an image transfer already in progress; cancelling into that is unsafe, so it is left to finish");
                     return AbortResult.SoftCancelRequested;
                 }
                 if (status == StatusUnknown || (!IsBusy(status) && status != Created &&
                     status != Cancelled && status != Complete && status != Failed)) {
+                    ReportAbort($"capture status 0x{status:X4} is unreadable or unrecognised, so nothing was sent");
                     return AbortResult.SoftCancelRequested;
                 }
                 if (!IsBusy(status)) {
+                    ReportAbort($"capture status is 0x{status:X4}, which is not busy; there is nothing to cancel");
                     return AbortResult.AlreadyRequested;
                 }
-                return cancelCapture() ? AbortResult.NativeCancelRequested : AbortResult.SoftCancelRequested;
+                bool sent = cancelCapture();
+                ReportAbort(sent
+                    ? $"native cancel sent to the driver with capture status 0x{status:X4}"
+                    : $"native cancel call failed with capture status 0x{status:X4}; the capture is left to finish");
+                return sent ? AbortResult.NativeCancelRequested : AbortResult.SoftCancelRequested;
             } finally {
                 Monitor.Exit(captureLock);
             }
