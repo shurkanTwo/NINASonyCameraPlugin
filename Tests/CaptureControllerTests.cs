@@ -132,6 +132,65 @@ public class CaptureControllerTests {
         Assert.Equal(1, camera.Cancels);
     }
 
+    [Fact]
+    public async Task ADeferredCancelIsSentEvenWhileTheDriverStillReportsCreated() {
+        // The second half of the same rig failure. The deferred cancel was
+        // delivered and then declined, because the status read immediately after
+        // the native start said 0x0000 - Created, which every other path in here
+        // rightly treats as nothing to cancel. The driver had simply not moved
+        // the capture to Capturing yet: six seconds later the plugin found "a
+        // capture still running with nothing of ours in flight" and the three
+        // frames after it were refused.
+        var camera = new Camera { NativeCancelEnabled = true, StatusAfterStart = 0 };
+        using var insideStart = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        camera.BeforeStart = () => {
+            insideStart.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        };
+
+        var start = Task.Factory.StartNew(() => Record.Exception(() => camera.Capture.Start(20)),
+            TaskCreationOptions.LongRunning);
+        try {
+            Assert.True(insideStart.Wait(TimeSpan.FromSeconds(5)),
+                "the start never reached the native call");
+            Assert.Equal(CaptureController.AbortResult.NativeCancelDeferred, camera.Capture.Abort());
+        } finally {
+            release.Set();
+        }
+
+        Assert.Null(await start.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(1, camera.Cancels);
+    }
+
+    [Theory]
+    [InlineData(3u)]  // Cancelled
+    [InlineData(4u)]  // Complete
+    [InlineData(2u)]  // Failed
+    public async Task ADeferredCancelIsNotSentWhenTheCaptureIsAlreadyOver(uint status) {
+        // Created is the only idle status the deferred path second-guesses. These
+        // three are not ambiguous, so it must still keep its hands off them.
+        var camera = new Camera { NativeCancelEnabled = true, StatusAfterStart = status };
+        using var insideStart = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        camera.BeforeStart = () => {
+            insideStart.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        };
+
+        var start = Task.Factory.StartNew(() => Record.Exception(() => camera.Capture.Start(20)),
+            TaskCreationOptions.LongRunning);
+        try {
+            Assert.True(insideStart.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Equal(CaptureController.AbortResult.NativeCancelDeferred, camera.Capture.Abort());
+        } finally {
+            release.Set();
+        }
+
+        Assert.Null(await start.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, camera.Cancels);
+    }
+
     [Theory]
     [InlineData(0x8002u)]
     [InlineData(0x8003u)]
@@ -150,6 +209,9 @@ public class CaptureControllerTests {
         internal int Starts;
         internal int Cancels;
         internal Action BeforeStart;
+        // What the native start leaves the status reading. The real driver does
+        // not always say Capturing by the time the start call returns.
+        internal uint StatusAfterStart = 1;
         internal Action BeforeReadNativeCancel;
         internal Func<uint> ReadStatus;
         internal readonly CaptureController Capture;
@@ -169,7 +231,7 @@ public class CaptureControllerTests {
                 exposure => {
                     BeforeStart?.Invoke();
                     Starts++;
-                    Status = 1;
+                    Status = StatusAfterStart;
                 },
                 () => {
                     Cancels++;
@@ -496,11 +558,17 @@ public class CaptureControllerTests {
 
     [Fact]
     public async Task CancellationAfterPollingBeginsInterruptsWaitWithoutAToken() {
+        // The deadline is deliberately loose. What is being asserted is that the
+        // abort interrupts the wait at all, not how quickly: the wait resumes on
+        // a Task.Delay continuation, xUnit runs this assembly's collections in
+        // parallel, and several tests here hold threads for seconds at a time.
+        // At two seconds this test failed two full-suite runs out of three while
+        // passing alone in 225ms - it was measuring the pool, not the abort.
         var camera = new Camera();
         camera.Capture.Start(1);
         var wait = camera.Capture.WaitUntilReady(CancellationToken.None);
         camera.Capture.Abort();
-        await Assert.ThrowsAsync<TaskCanceledException>(() => wait.WaitAsync(TimeSpan.FromSeconds(2)));
+        await Assert.ThrowsAsync<TaskCanceledException>(() => wait.WaitAsync(TimeSpan.FromSeconds(30)));
     }
 
     [Fact]

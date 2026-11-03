@@ -196,7 +196,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     // An abort that arrives after this check still has to wait for
                     // the lock, but only for the few lines left in this method.
                     if (Volatile.Read(ref request.CancelRequested) != 0 && nativeCancelEnabled()) {
-                        CancelUnderHeldLock(request);
+                        CancelUnderHeldLock(request, captureJustStarted: true);
                     }
                 } finally {
                     lock (requestLock) {
@@ -245,7 +245,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         /// so <see cref="Abort"/> and the deferred cancel at the end of
         /// <see cref="Start"/> cannot drift apart or log different things.
         /// </summary>
-        private AbortResult CancelUnderHeldLock(CaptureRequest request) {
+        /// <param name="captureJustStarted">
+        /// True only for the deferred cancel at the end of <see cref="Start"/>,
+        /// where this thread has just returned from the native start. It makes a
+        /// Created status mean "not announced yet" rather than "nothing running".
+        /// </param>
+        private AbortResult CancelUnderHeldLock(CaptureRequest request, bool captureJustStarted = false) {
             // An abort queued for the previous exposure must never cancel a new one.
             if (!ReferenceEquals(request, currentRequest)) {
                 ReportAbort("the abort belongs to an exposure that has already been superseded");
@@ -262,8 +267,24 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 return AbortResult.SoftCancelRequested;
             }
             if (!IsBusy(status)) {
-                ReportAbort($"capture status is 0x{status:X4}, which is not busy; there is nothing to cancel");
-                return AbortResult.AlreadyRequested;
+                // Created is the one idle status that can be a lie. The driver
+                // does not move a capture to Capturing until its worker picks it
+                // up, so a status read immediately after the native start can
+                // still say 0x0000 while the shutter is already committed.
+                // Cancelled, Complete and Failed are not ambiguous: those
+                // captures really are over.
+                //
+                // Measured on the rig 2026-11-03: the deferred cancel read
+                // 0x0000 at 16:33:41.2 and declined to send anything; six
+                // seconds later the plugin found "a capture still running with
+                // nothing of ours in flight", and the next three frames were all
+                // refused as "camera is still busy". The abort was honoured and
+                // still lost, which is the worst of both.
+                if (!captureJustStarted || status != Created) {
+                    ReportAbort($"capture status is 0x{status:X4}, which is not busy; there is nothing to cancel");
+                    return AbortResult.AlreadyRequested;
+                }
+                ReportAbort("the native start has just returned and the driver still reports 0x0000; sending the native cancel anyway, because the capture it started exists whether or not the driver has announced it");
             }
             bool sent = cancelCapture();
             ReportAbort(sent
