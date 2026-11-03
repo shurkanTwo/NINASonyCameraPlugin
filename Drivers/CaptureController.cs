@@ -43,6 +43,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // a disabled setting and a contended lock indistinguishable - and a
         // capture that nothing ever cancels is what ends a night.
         private readonly Action<string> onAbortDecision;
+        // How long a capture this thread has just started may take to show up
+        // in the status before the deferred cancel gives up on it.
+        private readonly int captureAnnounceTimeoutMs = 10000;
         private long lastCaptureEndTimestamp;
         private bool haveCaptureEnd;
         private sealed class CaptureRequest {
@@ -112,6 +115,51 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             if (slept > 0) {
                 onWaited?.Invoke(slept);
             }
+        }
+
+        /// <summary>
+        /// Waits, briefly, for a capture this thread has just started to appear
+        /// in the status. Called only from the deferred cancel, with
+        /// <see cref="captureLock"/> held.
+        /// <para>
+        /// The driver does not move a capture to Capturing until its worker picks
+        /// it up, so a status read taken the instant the native start returns can
+        /// still say Created while the shutter is already committed. Measured on
+        /// the rig 2026-11-03: the read at 16:33:41.2 said 0x0000, and six
+        /// seconds later the plugin found "a capture still running with nothing
+        /// of ours in flight".
+        /// </para>
+        /// <para>
+        /// Waiting is the only safe way to resolve that. Cancelling into a
+        /// Created capture instead was tried on the rig the same afternoon and
+        /// took NINA down with it: the cancel went out at 16:56:07.50 and the
+        /// process died in the same second, SonyMTPCamera.dll 1.0.1.25,
+        /// 0xc0000005 at offset 0x1fd79. The driver frees the capture task and
+        /// its parameters when Cancel reports success, and in that window the
+        /// task has not started reading them yet. So the status guards below
+        /// stay exactly as they are; this only gives the truth time to arrive.
+        /// </para>
+        /// <para>
+        /// Blocking here is acceptable: NINA has already abandoned this frame,
+        /// and each status read is itself a queued native call, so the bound is
+        /// generous rather than tight.
+        /// </para>
+        /// </summary>
+        private uint AwaitAnnouncedCapture() {
+            long started = clock.GetTimestamp();
+            int reads = 0;
+            uint status = Created;
+            while (clock.GetElapsedTime(started).TotalMilliseconds < captureAnnounceTimeoutMs) {
+                sleep(100);
+                status = getStatus();
+                reads++;
+                if (status != Created) {
+                    ReportAbort($"the capture took {(int)clock.GetElapsedTime(started).TotalMilliseconds}ms and {reads} status reads to appear after the native start returned, and now reads 0x{status:X4}");
+                    return status;
+                }
+            }
+            ReportAbort($"the driver still reported 0x0000 after {captureAnnounceTimeoutMs}ms and {reads} status reads, so nothing was sent; cancelling into a capture the driver has not announced crashes it");
+            return status;
         }
 
         private void MarkCaptureEnded() {
@@ -257,6 +305,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 return AbortResult.AlreadyRequested;
             }
             uint status = getStatus();
+            if (captureJustStarted && status == Created) {
+                status = AwaitAnnouncedCapture();
+            }
             if (status == Reading || status == Processing) {
                 ReportAbort($"capture status is 0x{status:X4}, an image transfer already in progress; cancelling into that is unsafe, so it is left to finish");
                 return AbortResult.SoftCancelRequested;
@@ -267,24 +318,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 return AbortResult.SoftCancelRequested;
             }
             if (!IsBusy(status)) {
-                // Created is the one idle status that can be a lie. The driver
-                // does not move a capture to Capturing until its worker picks it
-                // up, so a status read immediately after the native start can
-                // still say 0x0000 while the shutter is already committed.
-                // Cancelled, Complete and Failed are not ambiguous: those
-                // captures really are over.
-                //
-                // Measured on the rig 2026-11-03: the deferred cancel read
-                // 0x0000 at 16:33:41.2 and declined to send anything; six
-                // seconds later the plugin found "a capture still running with
-                // nothing of ours in flight", and the next three frames were all
-                // refused as "camera is still busy". The abort was honoured and
-                // still lost, which is the worst of both.
-                if (!captureJustStarted || status != Created) {
-                    ReportAbort($"capture status is 0x{status:X4}, which is not busy; there is nothing to cancel");
-                    return AbortResult.AlreadyRequested;
-                }
-                ReportAbort("the native start has just returned and the driver still reports 0x0000; sending the native cancel anyway, because the capture it started exists whether or not the driver has announced it");
+                ReportAbort($"capture status is 0x{status:X4}, which is not busy; there is nothing to cancel");
+                return AbortResult.AlreadyRequested;
             }
             bool sent = cancelCapture();
             ReportAbort(sent

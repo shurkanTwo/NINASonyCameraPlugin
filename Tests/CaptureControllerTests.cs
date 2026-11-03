@@ -133,14 +133,19 @@ public class CaptureControllerTests {
     }
 
     [Fact]
-    public async Task ADeferredCancelIsSentEvenWhileTheDriverStillReportsCreated() {
+    public async Task ADeferredCancelWaitsForACaptureTheDriverHasNotAnnouncedYet() {
         // The second half of the same rig failure. The deferred cancel was
         // delivered and then declined, because the status read immediately after
-        // the native start said 0x0000 - Created, which every other path in here
+        // the native start said 0x0000 - Created, which every path in here
         // rightly treats as nothing to cancel. The driver had simply not moved
         // the capture to Capturing yet: six seconds later the plugin found "a
         // capture still running with nothing of ours in flight" and the three
         // frames after it were refused.
+        //
+        // So the deferred cancel waits for the status to tell the truth, then
+        // decides as it always did. Sending the cancel into the Created status
+        // instead was tried on the rig and took NINA down inside the second:
+        // SonyMTPCamera.dll 1.0.1.25, 0xc0000005 at 0x1fd79.
         var camera = new Camera { NativeCancelEnabled = true, StatusAfterStart = 0 };
         using var insideStart = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
@@ -148,6 +153,10 @@ public class CaptureControllerTests {
             insideStart.Set();
             Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
         };
+        // Created on the first two reads, Capturing after that - the driver's
+        // worker picking the capture up.
+        var reads = 0;
+        camera.ReadStatus = () => Interlocked.Increment(ref reads) <= 2 ? 0u : 1u;
 
         var start = Task.Factory.StartNew(() => Record.Exception(() => camera.Capture.Start(20)),
             TaskCreationOptions.LongRunning);
@@ -161,6 +170,41 @@ public class CaptureControllerTests {
 
         Assert.Null(await start.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.Equal(1, camera.Cancels);
+        // The wait was a wait, not a spin, and it ended as soon as the capture
+        // appeared rather than running to the bound.
+        Assert.InRange(camera.SleptMs, 100, 1000);
+    }
+
+    [Fact]
+    public async Task ADeferredCancelIsNeverSentIntoACaptureThatIsNeverAnnounced() {
+        // This is the crash guard. Cancelling a capture the driver still reports
+        // as Created killed NINA on the rig 2026-11-03 at 16:56:07 - the driver
+        // frees the capture task and its parameters when Cancel reports success,
+        // and in that window the task has not read them yet. If the status never
+        // moves, nothing is sent, and the controller gives up rather than
+        // guessing.
+        var camera = new Camera { NativeCancelEnabled = true, StatusAfterStart = 0 };
+        using var insideStart = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        camera.BeforeStart = () => {
+            insideStart.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        };
+        camera.ReadStatus = () => 0u; // Created, for ever
+
+        var start = Task.Factory.StartNew(() => Record.Exception(() => camera.Capture.Start(20)),
+            TaskCreationOptions.LongRunning);
+        try {
+            Assert.True(insideStart.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Equal(CaptureController.AbortResult.NativeCancelDeferred, camera.Capture.Abort());
+        } finally {
+            release.Set();
+        }
+
+        Assert.Null(await start.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, camera.Cancels);
+        // Bounded: it gave up at ten seconds of simulated time, not never.
+        Assert.InRange(camera.SleptMs, 10000, 10200);
     }
 
     [Theory]
@@ -168,8 +212,8 @@ public class CaptureControllerTests {
     [InlineData(4u)]  // Complete
     [InlineData(2u)]  // Failed
     public async Task ADeferredCancelIsNotSentWhenTheCaptureIsAlreadyOver(uint status) {
-        // Created is the only idle status the deferred path second-guesses. These
-        // three are not ambiguous, so it must still keep its hands off them.
+        // Created is the only status the deferred path waits on. These three are
+        // terminal - the capture really is over - so it must send nothing.
         var camera = new Camera { NativeCancelEnabled = true, StatusAfterStart = status };
         using var insideStart = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
