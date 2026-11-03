@@ -41,6 +41,50 @@ public class CaptureControllerTests {
         await camera.Capture.WaitUntilReady(CancellationToken.None);
     }
 
+    [Fact]
+    public async Task AnAbortGetsThroughWhileTheStatusPollerIsInsideTheDriver() {
+        // The regression this pins down: WaitUntilReady used to hold captureLock
+        // across the status read, so an abort raised while the poller was inside
+        // the driver could not take that lock and fell back to the soft path -
+        // leaving the capture outstanding, which refuses every later frame until
+        // a reconnect. On the rig it was a coin toss, one abort in two; the gate
+        // here makes the contended case certain.
+        var camera = new Camera { NativeCancelEnabled = true };
+        camera.Capture.Start(20);
+
+        using var insideDriver = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var reads = 0;
+        camera.ReadStatus = () => {
+            // Only the poller's read is held open. Abort reads the status too,
+            // and blocking that one as well would be measuring the gate rather
+            // than the lock.
+            if (Interlocked.Increment(ref reads) == 1) {
+                insideDriver.Set();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+            }
+            return 1u; // still capturing
+        };
+
+        // A dedicated thread, not the pool: other tests in this assembly block
+        // pool threads for tens of seconds, and a poller that has not started
+        // would make this test measure scheduling instead of the lock.
+        var poll = Task.Factory.StartNew(() => camera.Capture.WaitUntilReady(CancellationToken.None),
+            TaskCreationOptions.LongRunning).Unwrap();
+        try {
+            Assert.True(insideDriver.Wait(TimeSpan.FromSeconds(5)),
+                "the poller never reached the status read");
+            // The poller is provably inside getStatus at this moment.
+            Assert.Equal(CaptureController.AbortResult.NativeCancelRequested, camera.Capture.Abort());
+            Assert.Equal(1, camera.Cancels);
+        } finally {
+            release.Set();
+            camera.ReadStatus = null;
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poll);
+    }
+
     [Theory]
     [InlineData(0x8002u)]
     [InlineData(0x8003u)]

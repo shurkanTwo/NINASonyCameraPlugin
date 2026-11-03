@@ -245,12 +245,26 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             while (true) {
                 token.ThrowIfCancellationRequested();
                 ThrowIfCancelled(request);
-                uint status;
+                // The status read is deliberately NOT inside captureLock. It used
+                // to be, and that starved Abort: this loop reacquires the lock
+                // ten times a second and each read goes through the native
+                // driver's single worker thread, so during an exposure the lock
+                // was held for most of the window in which a cancel needs it.
+                // Measured on the rig 2026-11-03 - a native cancel got through
+                // on one abort and timed out on the next, with the log reading
+                // "the capture lock could not be taken within 1000ms".
+                //
+                // Dropping the lock is safe because the read is a read: the
+                // native driver guards its own state, and what captureLock
+                // protects here is the decision that the status belongs to OUR
+                // exposure. That decision is still made under the lock, after
+                // the read, so a capture that superseded ours while the status
+                // was being fetched can never be mistaken for our own ending.
+                uint status = getStatus();
                 lock (captureLock) {
                     if (!ReferenceEquals(request, currentRequest)) {
                         throw new TaskCanceledException("Exposure superseded by a new capture.");
                     }
-                    status = getStatus();
                 }
                 token.ThrowIfCancellationRequested();
                 ThrowIfCancelled(request);
