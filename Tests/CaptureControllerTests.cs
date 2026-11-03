@@ -24,7 +24,16 @@ public class CaptureControllerTests {
             TaskCreationOptions.LongRunning);
         try {
             Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
-            Assert.Equal(CaptureController.AbortResult.SoftCancelRequested, camera.Capture.Abort());
+            // With native cancel on, the abort cannot take the lock the blocked
+            // start is holding, so it records the intent and reports it deferred;
+            // the start honours it. With native cancel off it never tries the
+            // lock at all. Either way nothing is sent here, and in both branches
+            // of this theory the start is rejected or cancelled before the
+            // shutter opens, so there is nothing to cancel afterwards either.
+            Assert.Equal(nativeCancel
+                    ? CaptureController.AbortResult.NativeCancelDeferred
+                    : CaptureController.AbortResult.SoftCancelRequested,
+                camera.Capture.Abort());
         } finally {
             release.Set();
         }
@@ -83,6 +92,44 @@ public class CaptureControllerTests {
         }
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poll);
+    }
+
+    [Fact]
+    public async Task AnAbortDuringTheNativeStartIsSentOnceTheStartReturns() {
+        // The rig case this pins down: the native driver runs one operation at a
+        // time, so a start that waits for the camera to release its previous
+        // photo holds captureLock for as long as that takes. An abort in that
+        // window cannot take the lock, and it used to be dropped there - the
+        // capture ran on uncancelled and every frame after it was refused as
+        // "camera is still busy" until a reconnect. Measured 2026-11-03: a 20s
+        // exposure aborted 6s in, 22 seconds of "busy with another operation",
+        // 0 of 3 later frames landed.
+        var camera = new Camera { NativeCancelEnabled = true };
+        using var insideStart = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        camera.BeforeStart = () => {
+            insideStart.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        };
+
+        // A dedicated thread, not the pool: other tests in this assembly block
+        // pool threads for tens of seconds.
+        var start = Task.Factory.StartNew(() => Record.Exception(() => camera.Capture.Start(20)),
+            TaskCreationOptions.LongRunning);
+        try {
+            Assert.True(insideStart.Wait(TimeSpan.FromSeconds(5)),
+                "the start never reached the native call");
+            // The start provably holds captureLock at this moment.
+            Assert.Equal(CaptureController.AbortResult.NativeCancelDeferred, camera.Capture.Abort());
+            Assert.Equal(0, camera.Cancels);
+        } finally {
+            release.Set();
+        }
+
+        Assert.Null(await start.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(1, camera.Starts);
+        // Sent on the way out of Start, under the lock it already held.
+        Assert.Equal(1, camera.Cancels);
     }
 
     [Theory]
@@ -457,7 +504,19 @@ public class CaptureControllerTests {
     }
 
     [Fact]
-    public async Task AbortDuringBlockedNativeStartReturnsWithoutCallingNativeCancel() {
+    public async Task AbortDuringBlockedNativeStartReturnsPromptlyWithoutReachingTheDriver() {
+        // Abort must never wait out a native start - NINA calls it from the
+        // sequence thread, and a start can sit in the driver for tens of seconds.
+        // So it gives up on the lock and reports the cancel as deferred; the
+        // start itself delivers it, which is what
+        // AnAbortDuringTheNativeStartIsSentOnceTheStartReturns pins down.
+        //
+        // This test used to assert SoftCancelRequested and that nothing was ever
+        // sent. That was the behaviour, and it cost a session: measured on the
+        // rig 2026-11-03, the capture ran on uncancelled and every frame after
+        // it was refused. What still has to hold, and is asserted here, is that
+        // the abort returns inside its timeout and does not reach into the
+        // driver while the start is in flight.
         var camera = new Camera { NativeCancelEnabled = true };
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
@@ -469,7 +528,7 @@ public class CaptureControllerTests {
         try {
             Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
             var abort = Task.Factory.StartNew(() => camera.Capture.Abort(), TaskCreationOptions.LongRunning);
-            Assert.Equal(CaptureController.AbortResult.SoftCancelRequested,
+            Assert.Equal(CaptureController.AbortResult.NativeCancelDeferred,
                 await abort.WaitAsync(TimeSpan.FromSeconds(2)));
             Assert.Equal(0, camera.Cancels);
         } finally {

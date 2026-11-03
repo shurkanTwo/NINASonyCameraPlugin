@@ -654,6 +654,13 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             if (result == CaptureController.AbortResult.SoftCancelRequested) {
                 _showWarning("Abort requested. The camera will finish the current exposure before another can start. Native cancellation is disabled or unavailable.");
                 Logger.Info("AbortExposure requested; native cancel unavailable; letting capture finish.");
+            } else if (result == CaptureController.AbortResult.NativeCancelDeferred) {
+                // Deliberately no warning: the cancel is being delivered, just
+                // not from this thread. The exposure starting on the other side
+                // of the lock sends it as soon as the native start returns, so
+                // telling the user the camera will finish the frame would be
+                // wrong.
+                Logger.Info("AbortExposure deferred; the starting exposure holds the capture lock and will send the native cancel itself.");
             }
         }
 
