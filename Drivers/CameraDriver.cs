@@ -75,7 +75,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 minCaptureIntervalMs: () => MinCaptureIntervalMs,
                 recoverStuckCapture: TryLiveViewRecovery,
                 onWaited: ms => Logger.Info($"Waited {ms}ms before this exposure: the previous one ended less than {MinCaptureIntervalMs}ms ago and this exposure is shorter than that."),
-                onAbortDecision: why => Logger.Info($"Abort decision: {why}."));
+                onAbortDecision: why => Logger.Info($"Abort decision: {why}."),
+                onWaitedForAbortedCapture: ms => Logger.Info(
+                    $"Waited {ms}ms for a cancelled exposure to finish on the camera; the shutter it had already opened cannot be changed while it is open."));
         }
 
         #region Internal Helpers

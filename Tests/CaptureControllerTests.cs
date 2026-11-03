@@ -133,6 +133,61 @@ public class CaptureControllerTests {
     }
 
     [Fact]
+    public void TheNextStartWaitsOutAnExposureThatWasCancelledMidFlight() {
+        // Cancelling does not close a shutter the camera has already opened, and
+        // the shutter speed cannot be changed while it is open. Measured on the
+        // rig 2026-11-03 with driver 1.0.1.26: a 20s exposure cancelled 105ms
+        // after the shutter opened, the next frame attempted 8s later and
+        // refused at 12.9s with "camera reports 0x00C8000A" - still 20s - and
+        // the two frames after that were dropped by NINA without a log line,
+        // because the refusal left it believing an exposure was still running.
+        var camera = new Camera { NativeCancelEnabled = true };
+        camera.Capture.Start(20);
+        camera.Clock.Advance(TimeSpan.FromMilliseconds(105));
+        Assert.Equal(CaptureController.AbortResult.NativeCancelRequested, camera.Capture.Abort());
+        Assert.Equal(1, camera.Cancels);
+
+        camera.Status = 4;
+        camera.Capture.Start(0.0125f);
+
+        // 20s from the shutter opening, plus the margin, less the 105ms already
+        // gone. Rounded up to whole slices of the sleep.
+        Assert.InRange(camera.SleptMs, 20395, 20500);
+        Assert.Equal(1, camera.AbortedCaptureWaits);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public void AnExposureThatEndedByItselfIsNotWaitedOutTwice() {
+        // Only a cancelled exposure is still running on the camera. One that
+        // completed has already put its frame down, and charging the next start
+        // for it would cost real sky.
+        var camera = new Camera { NativeCancelEnabled = true };
+        camera.Capture.Start(20);
+        camera.Status = 4;
+        camera.Capture.Start(0.0125f);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(0, camera.AbortedCaptureWaits);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public void AnAbortThatSentNothingDoesNotHoldTheNextStart() {
+        // Native cancel off: nothing was sent, so the exposure was never
+        // interrupted and NINA's own handling ends it. There is nothing to wait
+        // for, and waiting would delay every frame after a user abort.
+        var camera = new Camera { NativeCancelEnabled = false };
+        camera.Capture.Start(20);
+        Assert.Equal(CaptureController.AbortResult.SoftCancelRequested, camera.Capture.Abort());
+        Assert.Equal(0, camera.Cancels);
+
+        camera.Status = 4;
+        camera.Capture.Start(0.0125f);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(0, camera.AbortedCaptureWaits);
+    }
+
+    [Fact]
     public async Task ADeferredCancelWaitsForACaptureTheDriverHasNotAnnouncedYet() {
         // The second half of the same rig failure. The deferred cancel was
         // delivered and then declined, because the status read immediately after
@@ -265,6 +320,8 @@ public class CaptureControllerTests {
         internal int SleptMs;
         internal int WaitsReported;
         internal int LastWaitReportedMs;
+        internal int AbortedCaptureWaits;
+        internal int LastAbortedCaptureWaitMs;
         internal int RecoveryAttempts;
         internal Func<bool> Recover;
         internal readonly ManualTimeProvider Clock = new ManualTimeProvider();
@@ -295,7 +352,8 @@ public class CaptureControllerTests {
                 // Advance the test clock instead of really sleeping, so the wait
                 // is asserted on rather than waited out.
                 sleep: ms => { SleptMs += ms; Clock.Advance(TimeSpan.FromMilliseconds(ms)); },
-                onWaited: ms => { WaitsReported++; LastWaitReportedMs = ms; });
+                onWaited: ms => { WaitsReported++; LastWaitReportedMs = ms; },
+                onWaitedForAbortedCapture: ms => { AbortedCaptureWaits++; LastAbortedCaptureWaitMs = ms; });
         }
     }
 

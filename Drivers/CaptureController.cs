@@ -43,10 +43,24 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // a disabled setting and a contended lock indistinguishable - and a
         // capture that nothing ever cancels is what ends a night.
         private readonly Action<string> onAbortDecision;
+        // Reports a wait for an aborted exposure to finish on the camera. Its
+        // own line, not the quiet gap's: two different reasons to wait, and a
+        // log that cannot tell them apart is what made this fault take a day.
+        private readonly Action<int> onWaitedForAbortedCapture;
         // How long a capture this thread has just started may take to show up
         // in the status before the deferred cancel gives up on it.
         private readonly int captureAnnounceTimeoutMs = 10000;
         private long lastCaptureEndTimestamp;
+        // When the shutter opened, and for how long it was asked to stay open.
+        // Taken after the native start returns, because that call does the
+        // exposure-time change first: walking the camera's shutter ladder from
+        // 1/80 to 20s is about thirty seconds of stepping, and the exposure only
+        // begins once it is done.
+        private long captureStartTimestamp;
+        private double captureSeconds;
+        private long abortedCaptureStartTimestamp;
+        private double abortedCaptureSeconds;
+        private bool haveAbortedCapture;
         private bool haveCaptureEnd;
         private sealed class CaptureRequest {
             internal int CancelRequested;
@@ -58,7 +72,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             Func<bool> cancelCapture, Func<bool> nativeCancelEnabled, int cancelLockTimeoutMs = 1000,
             Func<int> minCaptureIntervalMs = null, Func<bool> recoverStuckCapture = null,
             TimeProvider clock = null, Action<int> sleep = null, Action<int> onWaited = null,
-            Action<string> onAbortDecision = null) {
+            Action<string> onAbortDecision = null, Action<int> onWaitedForAbortedCapture = null) {
             this.getStatus = getStatus;
             this.startCapture = startCapture;
             this.cancelCapture = cancelCapture;
@@ -70,6 +84,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             this.sleep = sleep ?? Thread.Sleep;
             this.onWaited = onWaited;
             this.onAbortDecision = onAbortDecision;
+            this.onWaitedForAbortedCapture = onWaitedForAbortedCapture;
         }
 
         private void ReportAbort(string why) {
@@ -162,6 +177,56 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             return status;
         }
 
+        /// <summary>
+        /// Holds the next start off until an exposure that was cancelled has
+        /// actually finished on the camera.
+        /// <para>
+        /// Cancelling does not close a shutter the camera has already opened, and
+        /// the shutter speed cannot be changed while it is open. So the next
+        /// capture's exposure-time change fails, the plugin refuses to shoot at
+        /// the wrong shutter - correctly - and NINA is left believing an exposure
+        /// is still running, after which it drops every later capture request
+        /// without a word.
+        /// </para>
+        /// <para>
+        /// Measured on the rig 2026-11-03 with driver 1.0.1.26: a 20s exposure
+        /// was cancelled 105ms after the shutter opened at 17:28:30.3, the next
+        /// frame was attempted at 17:28:38.6 and gave up at 17:28:51.5 reporting
+        /// "camera reports 0x00C8000A" - 20s, the shutter still open. The body
+        /// freed itself at about 17:28:50.3, one second before the attempt
+        /// expired. The two frames after that were never even logged as starting.
+        /// </para>
+        /// <para>
+        /// Waiting is the only correct answer while the camera finishes a frame
+        /// it was told to take. The bound is the exposure's own length, so it
+        /// costs nothing that was not already spent, and it is reported on its
+        /// own log line.
+        /// </para>
+        /// </summary>
+        private void WaitForAnAbortedExposureToFinish() {
+            if (!haveAbortedCapture) {
+                return;
+            }
+            haveAbortedCapture = false;
+            int slept = 0;
+            while (true) {
+                double elapsed = clock.GetElapsedTime(abortedCaptureStartTimestamp).TotalMilliseconds;
+                // A small margin: the camera has to put the frame down as well
+                // as stop exposing, and the readback the next start verifies
+                // against is not instant either.
+                int remaining = (int)(abortedCaptureSeconds * 1000.0 + 500.0 - elapsed);
+                if (remaining <= 0) {
+                    break;
+                }
+                int slice = Math.Min(remaining, 100);
+                sleep(slice);
+                slept += slice;
+            }
+            if (slept > 0) {
+                onWaitedForAbortedCapture?.Invoke(slept);
+            }
+        }
+
         private void MarkCaptureEnded() {
             lastCaptureEndTimestamp = clock.GetTimestamp();
             haveCaptureEnd = true;
@@ -198,6 +263,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         internal void Start(float exposureTime) {
+            WaitForAnAbortedExposureToFinish();
             WaitForQuietGap(exposureTime);
             lock (captureLock) {
                 var request = new CaptureRequest();
@@ -226,6 +292,8 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     ThrowIfCancelled(request);
                     // Serialize the native start itself: it can replace the native capture object.
                     startCapture(exposureTime);
+                    captureStartTimestamp = clock.GetTimestamp();
+                    captureSeconds = exposureTime;
                     // An abort raised while we were inside the native start could
                     // not take captureLock, so it recorded its intent and left.
                     // Honour it here, where the lock is already ours and the start
@@ -322,6 +390,14 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 return AbortResult.AlreadyRequested;
             }
             bool sent = cancelCapture();
+            if (sent) {
+                // The cancel ends the capture as far as the driver and NINA are
+                // concerned, but it does not close the shutter the camera has
+                // already opened. Remember when that exposure would finish.
+                abortedCaptureStartTimestamp = captureStartTimestamp;
+                abortedCaptureSeconds = captureSeconds;
+                haveAbortedCapture = true;
+            }
             ReportAbort(sent
                 ? $"native cancel sent to the driver with capture status 0x{status:X4}"
                 : $"native cancel call failed with capture status 0x{status:X4}; the capture is left to finish");
