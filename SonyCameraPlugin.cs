@@ -145,6 +145,73 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera {
             }
         }
 
+        /// <summary>
+        /// Quiet gap enforced between captures, in milliseconds; 0 disables it.
+        /// Only exposures shorter than the gap wait for it, so light frames are
+        /// unaffected and the cost falls on flats and bias, where the wedge
+        /// happens.
+        /// </summary>
+        public int MinCaptureIntervalMs {
+            get {
+                var raw = pluginSettings.GetValueString(nameof(MinCaptureIntervalMs), "4000");
+                return int.TryParse(raw, out var ms) && ms >= 0 ? ms : 4000;
+            }
+            set {
+                pluginSettings.SetValueString(nameof(MinCaptureIntervalMs), Math.Max(0, value).ToString());
+                RaisePropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// How many exposures may deliver no image in a row before the plugin
+        /// stops driving the camera; 0 disables the cap.
+        /// <para>
+        /// The point is not the frames - those are lost either way - but the
+        /// driver. A camera that has stopped answering will, if asked often
+        /// enough, make a native call exceed the 30s timeout that latches the
+        /// driver dead for the rest of the process; after that even enumerating
+        /// the camera fails and no reconnect can recover the session. Stopping
+        /// first keeps the driver usable, so one reconnect brings it all back.
+        /// </para>
+        /// </summary>
+        public int MaxConsecutiveCaptureFailures {
+            get {
+                var raw = pluginSettings.GetValueString(nameof(MaxConsecutiveCaptureFailures), "3");
+                return int.TryParse(raw, out var n) && n >= 0 ? n : 3;
+            }
+            set {
+                pluginSettings.SetValueString(nameof(MaxConsecutiveCaptureFailures), Math.Max(0, value).ToString());
+                RaisePropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// Whether a failed exposure makes the next one reopen the camera first.
+        /// <para>
+        /// Off by default, and the default is the measurement: on 2026-11-04 the
+        /// reopen itself worked - the log read "reopened the camera after 1
+        /// failed exposure(s)" - and the exposure that followed it then timed
+        /// out, where the same exposure landed three times out of three without
+        /// the reopen. Something about a freshly reopened handle stops the next
+        /// capture delivering, and until that is understood a reopen costs the
+        /// frame it was meant to save.
+        /// </para>
+        /// <para>
+        /// The failure cap is separate and stays on: it makes no native calls at
+        /// all, so it cannot have this problem.
+        /// </para>
+        /// </summary>
+        public bool EnableCameraReopenOnFailure {
+            get {
+                var raw = pluginSettings.GetValueString(nameof(EnableCameraReopenOnFailure), bool.FalseString);
+                return bool.TryParse(raw, out var enabled) && enabled;
+            }
+            set {
+                pluginSettings.SetValueString(nameof(EnableCameraReopenOnFailure), value.ToString());
+                RaisePropertyChanged();
+            }
+        }
+
         public event PropertyChangedEventHandler PropertyChanged;
         protected void RaisePropertyChanged([CallerMemberName] string propertyName = null) {
             this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));

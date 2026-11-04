@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
 using NINA.RetroKiwi.Plugin.SonyCamera.Drivers;
@@ -24,7 +24,16 @@ public class CaptureControllerTests {
             TaskCreationOptions.LongRunning);
         try {
             Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
-            Assert.Equal(CaptureController.AbortResult.SoftCancelRequested, camera.Capture.Abort());
+            // With native cancel on, the abort cannot take the lock the blocked
+            // start is holding, so it records the intent and reports it deferred;
+            // the start honours it. With native cancel off it never tries the
+            // lock at all. Either way nothing is sent here, and in both branches
+            // of this theory the start is rejected or cancelled before the
+            // shutter opens, so there is nothing to cancel afterwards either.
+            Assert.Equal(nativeCancel
+                    ? CaptureController.AbortResult.NativeCancelDeferred
+                    : CaptureController.AbortResult.SoftCancelRequested,
+                camera.Capture.Abort());
         } finally {
             release.Set();
         }
@@ -39,6 +48,365 @@ public class CaptureControllerTests {
         camera.Capture.Start(1);
         camera.Status = 4;
         await camera.Capture.WaitUntilReady(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task AnAbortGetsThroughWhileTheStatusPollerIsInsideTheDriver() {
+        // The regression this pins down: WaitUntilReady used to hold captureLock
+        // across the status read, so an abort raised while the poller was inside
+        // the driver could not take that lock and fell back to the soft path -
+        // leaving the capture outstanding, which refuses every later frame until
+        // a reconnect. On the rig it was a coin toss, one abort in two; the gate
+        // here makes the contended case certain.
+        var camera = new Camera { NativeCancelEnabled = true };
+        camera.Capture.Start(20);
+
+        using var insideDriver = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var reads = 0;
+        camera.ReadStatus = () => {
+            // Only the poller's read is held open. Abort reads the status too,
+            // and blocking that one as well would be measuring the gate rather
+            // than the lock.
+            if (Interlocked.Increment(ref reads) == 1) {
+                insideDriver.Set();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+            }
+            return 1u; // still capturing
+        };
+
+        // A dedicated thread, not the pool: other tests in this assembly block
+        // pool threads for tens of seconds, and a poller that has not started
+        // would make this test measure scheduling instead of the lock.
+        var poll = Task.Factory.StartNew(() => camera.Capture.WaitUntilReady(CancellationToken.None),
+            TaskCreationOptions.LongRunning).Unwrap();
+        try {
+            Assert.True(insideDriver.Wait(TimeSpan.FromSeconds(5)),
+                "the poller never reached the status read");
+            // The poller is provably inside getStatus at this moment.
+            Assert.Equal(CaptureController.AbortResult.NativeCancelRequested, camera.Capture.Abort());
+            Assert.Equal(1, camera.Cancels);
+        } finally {
+            release.Set();
+            camera.ReadStatus = null;
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poll);
+    }
+
+    [Fact]
+    public async Task AnAbortDuringTheNativeStartIsSentOnceTheStartReturns() {
+        // The rig case this pins down: the native driver runs one operation at a
+        // time, so a start that waits for the camera to release its previous
+        // photo holds captureLock for as long as that takes. An abort in that
+        // window cannot take the lock, and it used to be dropped there - the
+        // capture ran on uncancelled and every frame after it was refused as
+        // "camera is still busy" until a reconnect. Measured 2026-11-03: a 20s
+        // exposure aborted 6s in, 22 seconds of "busy with another operation",
+        // 0 of 3 later frames landed.
+        var camera = new Camera { NativeCancelEnabled = true };
+        using var insideStart = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        camera.BeforeStart = () => {
+            insideStart.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        };
+
+        // A dedicated thread, not the pool: other tests in this assembly block
+        // pool threads for tens of seconds.
+        var start = Task.Factory.StartNew(() => Record.Exception(() => camera.Capture.Start(20)),
+            TaskCreationOptions.LongRunning);
+        try {
+            Assert.True(insideStart.Wait(TimeSpan.FromSeconds(5)),
+                "the start never reached the native call");
+            // The start provably holds captureLock at this moment.
+            Assert.Equal(CaptureController.AbortResult.NativeCancelDeferred, camera.Capture.Abort());
+            Assert.Equal(0, camera.Cancels);
+        } finally {
+            release.Set();
+        }
+
+        Assert.Null(await start.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(1, camera.Starts);
+        // Sent on the way out of Start, under the lock it already held.
+        Assert.Equal(1, camera.Cancels);
+    }
+
+    [Fact]
+    public void AReconnectClearsTheFailureCap() {
+        // Without this the cap is a trap, not a guard: only an image clears the
+        // count, and once the cap refuses every start no image can be taken, so
+        // the camera stays refused until the host restarts. Measured on the rig
+        // 2026-11-04: the cap tripped at 10:31:29, a full disconnect and
+        // reconnect followed at 10:34:44, and the next start was still refused.
+        var camera = new Camera { MaxFailures = 3 };
+        for (int i = 0; i < 3; i++) camera.Capture.MarkCaptureFailed();
+        Assert.IsType<InvalidOperationException>(Record.Exception(() => camera.Capture.Start(1)));
+
+        camera.Capture.ResetFailureCount();
+
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Starts);
+        Assert.Equal(0, camera.Recoveries);
+    }
+
+    [Fact]
+    public void ADisabledRecoveryReportsNothingRatherThanAFailedAttempt() {
+        // Letting the callback answer false logged "could not reopen the
+        // camera", which reads as a failed attempt when nothing was attempted.
+        var camera = new Camera { RecoveryEnabled = false };
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.Start(1);
+        Assert.Equal(0, camera.Recoveries);
+        Assert.Empty(camera.RecoveryReports);
+        Assert.Equal(1, camera.Starts);
+    }
+
+    [Fact]
+    public void AFailedExposureMakesTheNextStartReopenTheCamera() {
+        // The gap that ended the night of 2026-11-03: an exposure stopped
+        // announcing its image and nothing ever tried a reconnect, which is the
+        // one recovery that works on this body. It is done before the next start
+        // rather than at the moment of failure, because that is when nothing is
+        // in flight.
+        var camera = new Camera();
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Recoveries);
+        Assert.Equal(1, camera.Starts);
+        Assert.Contains("reopened the camera after 1 failed exposure(s)", camera.RecoveryReports);
+    }
+
+    [Fact]
+    public void AnImageComingOffTheCameraClearsTheFailureCount() {
+        var camera = new Camera();
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.MarkCaptureSucceeded();
+        camera.Capture.Start(1);
+        Assert.Equal(0, camera.Recoveries);
+        Assert.Equal(1, camera.Starts);
+    }
+
+    [Fact]
+    public void RetrievingAnImageIsNotByItselfEvidenceOfSuccess() {
+        // MarkImageRetrieved times the quiet gap and runs even when the
+        // retrieval threw, so it must not clear the failure count on its own.
+        var camera = new Camera();
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.MarkImageRetrieved();
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Recoveries);
+    }
+
+    [Fact]
+    public void TheCameraIsNotDrivenAtAllOnceTheFailureCapIsReached() {
+        // The whole point of the cap. On 2026-11-03 the sequence retried every
+        // 50 seconds for twenty minutes until a native call exceeded the 30s
+        // timeout that latches the driver dead for the rest of the process -
+        // after which the camera could not even be enumerated, so a reconnect
+        // could no longer have saved the session. Refusing makes no native calls,
+        // so the driver stays usable.
+        var camera = new Camera { MaxFailures = 3 };
+        for (int i = 0; i < 3; i++) camera.Capture.MarkCaptureFailed();
+
+        var error = Record.Exception(() => camera.Capture.Start(1));
+        Assert.IsType<InvalidOperationException>(error);
+        Assert.Contains("delivered no image", error.Message);
+        Assert.Equal(0, camera.Starts);
+        Assert.Equal(0, camera.Recoveries);
+    }
+
+    [Fact]
+    public void BelowTheCapTheExposureStillRuns() {
+        var camera = new Camera { MaxFailures = 3 };
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Starts);
+        Assert.Equal(1, camera.Recoveries);
+    }
+
+    [Fact]
+    public void AZeroCapNeverRefuses() {
+        var camera = new Camera { MaxFailures = 0 };
+        for (int i = 0; i < 20; i++) camera.Capture.MarkCaptureFailed();
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Starts);
+    }
+
+    [Fact]
+    public void ARecoveryThatFailsOrThrowsStillLetsTheExposureRun() {
+        // A reopen is an attempt, not a precondition. Refusing to shoot because
+        // the recovery failed would lose frames the camera might still deliver.
+        var camera = new Camera { RecoverSucceeds = false };
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Starts);
+        Assert.Contains("could not reopen the camera after 1 failed exposure(s); starting the exposure anyway", camera.RecoveryReports);
+
+        var thrower = new Camera { RecoverThrows = new InvalidOperationException("boom") };
+        thrower.Capture.MarkCaptureFailed();
+        thrower.Capture.Start(1);
+        Assert.Equal(1, thrower.Starts);
+        Assert.Contains(thrower.RecoveryReports, r => r.Contains("threw: boom"));
+    }
+
+    [Fact]
+    public void TheNextStartWaitsOutAnExposureThatWasCancelledMidFlight() {
+        // Cancelling does not close a shutter the camera has already opened, and
+        // the shutter speed cannot be changed while it is open. Measured on the
+        // rig 2026-11-03 with driver 1.0.1.26: a 20s exposure cancelled 105ms
+        // after the shutter opened, the next frame attempted 8s later and
+        // refused at 12.9s with "camera reports 0x00C8000A" - still 20s - and
+        // the two frames after that were dropped by NINA without a log line,
+        // because the refusal left it believing an exposure was still running.
+        var camera = new Camera { NativeCancelEnabled = true };
+        camera.Capture.Start(20);
+        camera.Clock.Advance(TimeSpan.FromMilliseconds(105));
+        Assert.Equal(CaptureController.AbortResult.NativeCancelRequested, camera.Capture.Abort());
+        Assert.Equal(1, camera.Cancels);
+
+        camera.Status = 4;
+        camera.Capture.Start(0.0125f);
+
+        // 20s from the shutter opening, plus the margin, less the 105ms already
+        // gone. Rounded up to whole slices of the sleep.
+        Assert.InRange(camera.SleptMs, 20395, 20500);
+        Assert.Equal(1, camera.AbortedCaptureWaits);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public void AnExposureThatEndedByItselfIsNotWaitedOutTwice() {
+        // Only a cancelled exposure is still running on the camera. One that
+        // completed has already put its frame down, and charging the next start
+        // for it would cost real sky.
+        var camera = new Camera { NativeCancelEnabled = true };
+        camera.Capture.Start(20);
+        camera.Status = 4;
+        camera.Capture.Start(0.0125f);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(0, camera.AbortedCaptureWaits);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public void AnAbortThatSentNothingDoesNotHoldTheNextStart() {
+        // Native cancel off: nothing was sent, so the exposure was never
+        // interrupted and NINA's own handling ends it. There is nothing to wait
+        // for, and waiting would delay every frame after a user abort.
+        var camera = new Camera { NativeCancelEnabled = false };
+        camera.Capture.Start(20);
+        Assert.Equal(CaptureController.AbortResult.SoftCancelRequested, camera.Capture.Abort());
+        Assert.Equal(0, camera.Cancels);
+
+        camera.Status = 4;
+        camera.Capture.Start(0.0125f);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(0, camera.AbortedCaptureWaits);
+    }
+
+    [Fact]
+    public async Task ADeferredCancelWaitsForACaptureTheDriverHasNotAnnouncedYet() {
+        // The second half of the same rig failure. The deferred cancel was
+        // delivered and then declined, because the status read immediately after
+        // the native start said 0x0000 - Created, which every path in here
+        // rightly treats as nothing to cancel. The driver had simply not moved
+        // the capture to Capturing yet: six seconds later the plugin found "a
+        // capture still running with nothing of ours in flight" and the three
+        // frames after it were refused.
+        //
+        // So the deferred cancel waits for the status to tell the truth, then
+        // decides as it always did. Sending the cancel into the Created status
+        // instead was tried on the rig and took NINA down inside the second:
+        // SonyMTPCamera.dll 1.0.1.25, 0xc0000005 at 0x1fd79.
+        var camera = new Camera { NativeCancelEnabled = true, StatusAfterStart = 0 };
+        using var insideStart = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        camera.BeforeStart = () => {
+            insideStart.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        };
+        // Created on the first two reads, Capturing after that - the driver's
+        // worker picking the capture up.
+        var reads = 0;
+        camera.ReadStatus = () => Interlocked.Increment(ref reads) <= 2 ? 0u : 1u;
+
+        var start = Task.Factory.StartNew(() => Record.Exception(() => camera.Capture.Start(20)),
+            TaskCreationOptions.LongRunning);
+        try {
+            Assert.True(insideStart.Wait(TimeSpan.FromSeconds(5)),
+                "the start never reached the native call");
+            Assert.Equal(CaptureController.AbortResult.NativeCancelDeferred, camera.Capture.Abort());
+        } finally {
+            release.Set();
+        }
+
+        Assert.Null(await start.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(1, camera.Cancels);
+        // The wait was a wait, not a spin, and it ended as soon as the capture
+        // appeared rather than running to the bound.
+        Assert.InRange(camera.SleptMs, 100, 1000);
+    }
+
+    [Fact]
+    public async Task ADeferredCancelIsNeverSentIntoACaptureThatIsNeverAnnounced() {
+        // This is the crash guard. Cancelling a capture the driver still reports
+        // as Created killed NINA on the rig 2026-11-03 at 16:56:07 - the driver
+        // frees the capture task and its parameters when Cancel reports success,
+        // and in that window the task has not read them yet. If the status never
+        // moves, nothing is sent, and the controller gives up rather than
+        // guessing.
+        var camera = new Camera { NativeCancelEnabled = true, StatusAfterStart = 0 };
+        using var insideStart = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        camera.BeforeStart = () => {
+            insideStart.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        };
+        camera.ReadStatus = () => 0u; // Created, for ever
+
+        var start = Task.Factory.StartNew(() => Record.Exception(() => camera.Capture.Start(20)),
+            TaskCreationOptions.LongRunning);
+        try {
+            Assert.True(insideStart.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Equal(CaptureController.AbortResult.NativeCancelDeferred, camera.Capture.Abort());
+        } finally {
+            release.Set();
+        }
+
+        Assert.Null(await start.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, camera.Cancels);
+        // Bounded: it gave up at ten seconds of simulated time, not never.
+        Assert.InRange(camera.SleptMs, 10000, 10200);
+    }
+
+    [Theory]
+    [InlineData(3u)]  // Cancelled
+    [InlineData(4u)]  // Complete
+    [InlineData(2u)]  // Failed
+    public async Task ADeferredCancelIsNotSentWhenTheCaptureIsAlreadyOver(uint status) {
+        // Created is the only status the deferred path waits on. These three are
+        // terminal - the capture really is over - so it must send nothing.
+        var camera = new Camera { NativeCancelEnabled = true, StatusAfterStart = status };
+        using var insideStart = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        camera.BeforeStart = () => {
+            insideStart.Set();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+        };
+
+        var start = Task.Factory.StartNew(() => Record.Exception(() => camera.Capture.Start(20)),
+            TaskCreationOptions.LongRunning);
+        try {
+            Assert.True(insideStart.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Equal(CaptureController.AbortResult.NativeCancelDeferred, camera.Capture.Abort());
+        } finally {
+            release.Set();
+        }
+
+        Assert.Null(await start.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, camera.Cancels);
     }
 
     [Theory]
@@ -59,9 +427,31 @@ public class CaptureControllerTests {
         internal int Starts;
         internal int Cancels;
         internal Action BeforeStart;
+        // What the native start leaves the status reading. The real driver does
+        // not always say Capturing by the time the start call returns.
+        internal uint StatusAfterStart = 1;
         internal Action BeforeReadNativeCancel;
         internal Func<uint> ReadStatus;
         internal readonly CaptureController Capture;
+        // Quiet-gap and recovery instrumentation. Defaults leave the controller
+        // behaving exactly as it did before either was added.
+        internal int MinIntervalMs;
+        internal int SleptMs;
+        internal int WaitsReported;
+        internal int LastWaitReportedMs;
+        internal int AbortedCaptureWaits;
+        internal int LastAbortedCaptureWaitMs;
+        // Recovery instrumentation. The cap defaults to 0 - disabled - so every
+        // test written before it existed behaves exactly as it did.
+        internal int Recoveries;
+        internal bool RecoverSucceeds = true;
+        internal Exception RecoverThrows;
+        internal int MaxFailures;
+        internal bool RecoveryEnabled = true;
+        internal readonly System.Collections.Generic.List<string> RecoveryReports = new System.Collections.Generic.List<string>();
+        internal int RecoveryAttempts;
+        internal Func<bool> Recover;
+        internal readonly ManualTimeProvider Clock = new ManualTimeProvider();
 
         internal Camera() {
             Capture = new CaptureController(
@@ -69,7 +459,7 @@ public class CaptureControllerTests {
                 exposure => {
                     BeforeStart?.Invoke();
                     Starts++;
-                    Status = 1;
+                    Status = StatusAfterStart;
                 },
                 () => {
                     Cancels++;
@@ -79,8 +469,200 @@ public class CaptureControllerTests {
                     BeforeReadNativeCancel?.Invoke();
                     return NativeCancelEnabled;
                 },
-                cancelLockTimeoutMs: 20);
+                cancelLockTimeoutMs: 20,
+                minCaptureIntervalMs: () => MinIntervalMs,
+                recoverStuckCapture: () => {
+                    RecoveryAttempts++;
+                    return Recover != null && Recover();
+                },
+                clock: Clock,
+                // Advance the test clock instead of really sleeping, so the wait
+                // is asserted on rather than waited out.
+                sleep: ms => { SleptMs += ms; Clock.Advance(TimeSpan.FromMilliseconds(ms)); },
+                onWaited: ms => { WaitsReported++; LastWaitReportedMs = ms; },
+                onWaitedForAbortedCapture: ms => { AbortedCaptureWaits++; LastAbortedCaptureWaitMs = ms; },
+                recoverCamera: () => {
+                    Recoveries++;
+                    if (RecoverThrows != null) throw RecoverThrows;
+                    return RecoverSucceeds;
+                },
+                maxConsecutiveFailures: () => MaxFailures,
+                onRecovery: what => RecoveryReports.Add(what),
+                recoveryEnabled: () => RecoveryEnabled);
         }
+    }
+
+    [Fact]
+    public async Task NoQuietGapIsWaitedWhenTheIntervalIsZero() {
+        var camera = new Camera();
+        camera.Capture.Start(1);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(1);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public async Task AQuietGapIsWaitedOutBeforeTheNextCapture() {
+        var camera = new Camera { MinIntervalMs = 750 };
+        camera.Capture.Start(0.01f);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(0.01f);
+        Assert.InRange(camera.SleptMs, 750, 800);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public void TheFirstCaptureIsNeverDelayed() {
+        var camera = new Camera { MinIntervalMs = 5000 };
+        camera.Capture.Start(1);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(1, camera.Starts);
+    }
+
+    [Fact]
+    public async Task TimeAlreadyElapsedCountsTowardsTheGap() {
+        var camera = new Camera { MinIntervalMs = 1000 };
+        camera.Capture.Start(0.01f);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Clock.Advance(TimeSpan.FromMilliseconds(900));
+        camera.Status = 4;
+        camera.Capture.Start(0.01f);
+        Assert.InRange(camera.SleptMs, 100, 150);
+    }
+
+    [Fact]
+    public async Task AnExposureLongerThanTheGapIsNotDelayed() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(30);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(30);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public async Task AnExposureExactlyTheLengthOfTheGapIsNotDelayed() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(4);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(4);
+        Assert.Equal(0, camera.SleptMs);
+    }
+
+    [Fact]
+    public async Task AnExposureShorterThanTheGapWaits() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(0.01f);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(0.01f);
+        Assert.InRange(camera.SleptMs, 4000, 4050);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    // The gap exists to keep the next shutter release off the previous frame's
+    // download. The exposure ending and the image coming off the camera are
+    // different moments: on an a7S the 12.4MB retrieval was still being polled
+    // 4.17s after it started, so a gap timed from the exposure ending is spent
+    // entirely inside the transfer and protects nothing.
+    [Fact]
+    public async Task TheGapIsMeasuredFromTheImageRetrievalNotFromTheExposureEnding() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(0.01f);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+
+        // The whole gap elapses while the image is still being pulled off the
+        // camera, which is exactly the case that used to skip the wait.
+        camera.Clock.Advance(TimeSpan.FromMilliseconds(4000));
+        camera.Capture.MarkImageRetrieved();
+
+        camera.Status = 4;
+        camera.Capture.Start(0.01f);
+        Assert.InRange(camera.SleptMs, 4000, 4050);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public async Task ALongExposureIsStillNotDelayedOnceTheImageIsRetrieved() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(30);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Capture.MarkImageRetrieved();
+        camera.Status = 4;
+        camera.Capture.Start(30);
+        Assert.Equal(0, camera.SleptMs);
+        Assert.Equal(2, camera.Starts);
+    }
+
+    [Fact]
+    public async Task AWaitThatHappensIsReportedOnce() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(0.01f);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(0.01f);
+        Assert.Equal(1, camera.WaitsReported);
+        Assert.InRange(camera.LastWaitReportedMs, 4000, 4050);
+    }
+
+    [Fact]
+    public async Task NoWaitIsReportedWhenNoneWasNeeded() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(30);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.Capture.Start(30);
+        Assert.Equal(0, camera.WaitsReported);
+    }
+
+    [Fact]
+    public void RecoveryThatClearsAStuckCaptureLetsTheStartProceed() {
+        var camera = new Camera { Status = 1 };
+        camera.Recover = () => { camera.Status = 4; return true; };
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.RecoveryAttempts);
+        Assert.Equal(1, camera.Starts);
+    }
+
+    [Fact]
+    public void RecoveryThatFailsStillRejectsTheStart() {
+        var camera = new Camera { Status = 1 };
+        camera.Recover = () => false;
+        Assert.Throws<InvalidOperationException>(() => camera.Capture.Start(1));
+        Assert.Equal(1, camera.RecoveryAttempts);
+        Assert.Equal(0, camera.Starts);
+    }
+
+    [Fact]
+    public void RecoveryThatReportsSuccessButLeavesItBusyStillRejectsTheStart() {
+        var camera = new Camera { Status = 1 };
+        camera.Recover = () => true;   // claims success, status stays capturing
+        Assert.Throws<InvalidOperationException>(() => camera.Capture.Start(1));
+        Assert.Equal(1, camera.RecoveryAttempts);
+        Assert.Equal(0, camera.Starts);
+    }
+
+    [Fact]
+    public void RecoveryIsNotAttemptedWhenTheCameraIsIdle() {
+        var camera = new Camera { Status = 4 };
+        camera.Capture.Start(1);
+        Assert.Equal(0, camera.RecoveryAttempts);
+        Assert.Equal(1, camera.Starts);
     }
 
     [Theory]
@@ -213,15 +795,33 @@ public class CaptureControllerTests {
 
     [Fact]
     public async Task CancellationAfterPollingBeginsInterruptsWaitWithoutAToken() {
+        // The deadline is deliberately loose. What is being asserted is that the
+        // abort interrupts the wait at all, not how quickly: the wait resumes on
+        // a Task.Delay continuation, xUnit runs this assembly's collections in
+        // parallel, and several tests here hold threads for seconds at a time.
+        // At two seconds this test failed two full-suite runs out of three while
+        // passing alone in 225ms - it was measuring the pool, not the abort.
         var camera = new Camera();
         camera.Capture.Start(1);
         var wait = camera.Capture.WaitUntilReady(CancellationToken.None);
         camera.Capture.Abort();
-        await Assert.ThrowsAsync<TaskCanceledException>(() => wait.WaitAsync(TimeSpan.FromSeconds(2)));
+        await Assert.ThrowsAsync<TaskCanceledException>(() => wait.WaitAsync(TimeSpan.FromSeconds(30)));
     }
 
     [Fact]
-    public async Task AbortDuringBlockedNativeStartReturnsWithoutCallingNativeCancel() {
+    public async Task AbortDuringBlockedNativeStartReturnsPromptlyWithoutReachingTheDriver() {
+        // Abort must never wait out a native start - NINA calls it from the
+        // sequence thread, and a start can sit in the driver for tens of seconds.
+        // So it gives up on the lock and reports the cancel as deferred; the
+        // start itself delivers it, which is what
+        // AnAbortDuringTheNativeStartIsSentOnceTheStartReturns pins down.
+        //
+        // This test used to assert SoftCancelRequested and that nothing was ever
+        // sent. That was the behaviour, and it cost a session: measured on the
+        // rig 2026-11-03, the capture ran on uncancelled and every frame after
+        // it was refused. What still has to hold, and is asserted here, is that
+        // the abort returns inside its timeout and does not reach into the
+        // driver while the start is in flight.
         var camera = new Camera { NativeCancelEnabled = true };
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
@@ -233,7 +833,7 @@ public class CaptureControllerTests {
         try {
             Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
             var abort = Task.Factory.StartNew(() => camera.Capture.Abort(), TaskCreationOptions.LongRunning);
-            Assert.Equal(CaptureController.AbortResult.SoftCancelRequested,
+            Assert.Equal(CaptureController.AbortResult.NativeCancelDeferred,
                 await abort.WaitAsync(TimeSpan.FromSeconds(2)));
             Assert.Equal(0, camera.Cancels);
         } finally {

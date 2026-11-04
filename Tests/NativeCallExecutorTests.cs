@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,14 +8,21 @@ using Xunit;
 public class NativeCallExecutorTests {
     [Fact]
     public async Task NativeCallsNeverOverlap() {
+        // Dedicated threads for the callers, not Task.Run. Invoke blocks its
+        // caller while the work it queued needs a pool thread of its own, so
+        // twelve pool callers starve the pool they are waiting on: the pool
+        // injects threads about once a second, and under a loaded suite that
+        // reached Invoke's 30s timeout and failed the run. The thing being
+        // asserted is that concurrent callers never overlap inside the DLL,
+        // which does not depend on where the callers come from.
         var executor = new NativeCallExecutor();
         int active = 0;
-        var calls = Enumerable.Range(0, 12).Select(_ => Task.Run(() => executor.Invoke(() => {
+        var calls = Enumerable.Range(0, 12).Select(_ => Task.Factory.StartNew(() => executor.Invoke(() => {
             Assert.Equal(1, Interlocked.Increment(ref active));
             Thread.Sleep(2);
             Assert.Equal(0, Interlocked.Decrement(ref active));
             return 1;
-        })));
+        }), TaskCreationOptions.LongRunning));
         Assert.Equal(12, (await Task.WhenAll(calls)).Sum());
     }
 
