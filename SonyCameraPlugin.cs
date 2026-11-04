@@ -162,6 +162,29 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera {
             }
         }
 
+        /// <summary>
+        /// How many exposures may deliver no image in a row before the plugin
+        /// stops driving the camera; 0 disables the cap.
+        /// <para>
+        /// The point is not the frames - those are lost either way - but the
+        /// driver. A camera that has stopped answering will, if asked often
+        /// enough, make a native call exceed the 30s timeout that latches the
+        /// driver dead for the rest of the process; after that even enumerating
+        /// the camera fails and no reconnect can recover the session. Stopping
+        /// first keeps the driver usable, so one reconnect brings it all back.
+        /// </para>
+        /// </summary>
+        public int MaxConsecutiveCaptureFailures {
+            get {
+                var raw = pluginSettings.GetValueString(nameof(MaxConsecutiveCaptureFailures), "3");
+                return int.TryParse(raw, out var n) && n >= 0 ? n : 3;
+            }
+            set {
+                pluginSettings.SetValueString(nameof(MaxConsecutiveCaptureFailures), Math.Max(0, value).ToString());
+                RaisePropertyChanged();
+            }
+        }
+
         public event PropertyChangedEventHandler PropertyChanged;
         protected void RaisePropertyChanged([CallerMemberName] string propertyName = null) {
             this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));

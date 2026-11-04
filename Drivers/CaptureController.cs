@@ -47,6 +47,14 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // own line, not the quiet gap's: two different reasons to wait, and a
         // log that cannot tell them apart is what made this fault take a day.
         private readonly Action<int> onWaitedForAbortedCapture;
+        // Closes and reopens the camera in place. The only recovery that has ever
+        // worked on this body, and the host never sees it disconnected.
+        private readonly Func<bool> recoverCamera;
+        // After this many exposures in a row deliver nothing, stop touching the
+        // camera at all. See RefuseIfTooManyFailures for why that is the point.
+        private readonly Func<int> maxConsecutiveFailures;
+        private readonly Action<string> onRecovery;
+        private int consecutiveFailures;
         // How long a capture this thread has just started may take to show up
         // in the status before the deferred cancel gives up on it.
         private readonly int captureAnnounceTimeoutMs = 10000;
@@ -72,7 +80,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             Func<bool> cancelCapture, Func<bool> nativeCancelEnabled, int cancelLockTimeoutMs = 1000,
             Func<int> minCaptureIntervalMs = null, Func<bool> recoverStuckCapture = null,
             TimeProvider clock = null, Action<int> sleep = null, Action<int> onWaited = null,
-            Action<string> onAbortDecision = null, Action<int> onWaitedForAbortedCapture = null) {
+            Action<string> onAbortDecision = null, Action<int> onWaitedForAbortedCapture = null,
+            Func<bool> recoverCamera = null, Func<int> maxConsecutiveFailures = null,
+            Action<string> onRecovery = null) {
             this.getStatus = getStatus;
             this.startCapture = startCapture;
             this.cancelCapture = cancelCapture;
@@ -85,6 +95,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             this.onWaited = onWaited;
             this.onAbortDecision = onAbortDecision;
             this.onWaitedForAbortedCapture = onWaitedForAbortedCapture;
+            this.recoverCamera = recoverCamera;
+            this.maxConsecutiveFailures = maxConsecutiveFailures ?? (() => 0);
+            this.onRecovery = onRecovery;
         }
 
         private void ReportAbort(string why) {
@@ -178,6 +191,90 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         /// <summary>
+        /// Records that an exposure delivered no image. Counted rather than acted
+        /// on immediately, because the useful moment to recover is just before
+        /// the next start, when nothing is in flight.
+        /// </summary>
+        internal void MarkCaptureFailed() {
+            Interlocked.Increment(ref consecutiveFailures);
+        }
+
+        /// <summary>
+        /// Records that an image came off the camera, which is the only evidence
+        /// that clears the failure count. Deliberately separate from
+        /// <see cref="MarkImageRetrieved"/>: that one is about when the traffic
+        /// stopped and runs even when the retrieval threw.
+        /// </summary>
+        internal void MarkCaptureSucceeded() {
+            Interlocked.Exchange(ref consecutiveFailures, 0);
+        }
+
+        /// <summary>
+        /// Stops driving a camera that has failed too many times in a row.
+        /// <para>
+        /// This is the fault that ends nights. On 2026-11-03 at 23:23 an exposure
+        /// stopped announcing its image; the sequence's error behaviour is
+        /// ContinueOnError, so NINA started another, which failed the same way,
+        /// every 50 seconds for twenty minutes. Around 23:44 a native call
+        /// finally exceeded NativeCallExecutor's 30s timeout, which latches the
+        /// driver dead for the rest of the process - after that the camera could
+        /// not even be enumerated, so a reconnect could no longer have saved the
+        /// session even once the body recovered.
+        /// </para>
+        /// <para>
+        /// Refusing here makes no native calls at all, so the executor cannot
+        /// latch. The frames are lost either way, but the driver stays usable and
+        /// one reconnect at any later time brings the whole session back.
+        /// </para>
+        /// </summary>
+        private void RefuseIfTooManyFailures() {
+            int cap = maxConsecutiveFailures();
+            if (cap <= 0) {
+                return;
+            }
+            int failures = Volatile.Read(ref consecutiveFailures);
+            if (failures < cap) {
+                return;
+            }
+            throw new InvalidOperationException(
+                $"Cannot start exposure: the last {failures} exposures delivered no image. " +
+                "Not driving the camera further, so the driver stays usable - reconnect the camera to resume.");
+        }
+
+        /// <summary>
+        /// Reopens the camera when the previous exposure delivered nothing.
+        /// <para>
+        /// A close and reopen is the only recovery that has ever cleared this
+        /// body: it was done by hand three times on 2026-11-03 and worked every
+        /// time, including on a capture the camera was holding open. Doing it
+        /// here costs a few seconds on a path where a frame has already been
+        /// lost, and it is invisible to the host - the handle is swapped under
+        /// the connection lock, so the camera never reads as disconnected.
+        /// </para>
+        /// <para>
+        /// Attempted once per failed exposure rather than in a loop. A camera
+        /// that will not come back trips the cap above instead of being
+        /// reopened indefinitely.
+        /// </para>
+        /// </summary>
+        private void RecoverIfTheLastExposureFailed() {
+            if (recoverCamera == null || Volatile.Read(ref consecutiveFailures) == 0) {
+                return;
+            }
+            int failures = Volatile.Read(ref consecutiveFailures);
+            bool recovered;
+            try {
+                recovered = recoverCamera();
+            } catch (Exception ex) {
+                onRecovery?.Invoke($"reopening the camera after {failures} failed exposure(s) threw: {ex.Message}");
+                return;
+            }
+            onRecovery?.Invoke(recovered
+                ? $"reopened the camera after {failures} failed exposure(s)"
+                : $"could not reopen the camera after {failures} failed exposure(s); starting the exposure anyway");
+        }
+
+        /// <summary>
         /// Holds the next start off until an exposure that was cancelled has
         /// actually finished on the camera.
         /// <para>
@@ -263,7 +360,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         internal void Start(float exposureTime) {
+            RefuseIfTooManyFailures();
             WaitForAnAbortedExposureToFinish();
+            RecoverIfTheLastExposureFailed();
             WaitForQuietGap(exposureTime);
             lock (captureLock) {
                 var request = new CaptureRequest();

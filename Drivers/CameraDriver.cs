@@ -34,7 +34,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // them. Three short reads is what clears it by hand; more would only
         // delay the start that follows.
         // Quiet gap applied between captures whose exposure is shorter than it.
-        private const int DEFAULT_CAPTURE_INTERVAL_MS = 4000;
+        private const int DEFAULT_CAPTURE_INTERVAL_MS = 4000;
+        // Three is enough to ride out a transient camera, and few enough to
+        // stop well before a native call can latch the driver dead.
+        private const int DEFAULT_MAX_CAPTURE_FAILURES = 3;
 
         private const int LIVEVIEW_RECOVERY_READS = 3;
         private const int LIVEVIEW_RECOVERY_READ_GAP_MS = 400;
@@ -77,7 +80,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 onWaited: ms => Logger.Info($"Waited {ms}ms before this exposure: the previous one ended less than {MinCaptureIntervalMs}ms ago and this exposure is shorter than that."),
                 onAbortDecision: why => Logger.Info($"Abort decision: {why}."),
                 onWaitedForAbortedCapture: ms => Logger.Info(
-                    $"Waited {ms}ms for a cancelled exposure to finish on the camera; the shutter it had already opened cannot be changed while it is open."));
+                    $"Waited {ms}ms for a cancelled exposure to finish on the camera; the shutter it had already opened cannot be changed while it is open."),
+                recoverCamera: ReopenCamera,
+                maxConsecutiveFailures: () => MaxConsecutiveFailures,
+                onRecovery: what => Logger.Warning($"Camera recovery: {what}."));
         }
 
         #region Internal Helpers
@@ -174,6 +180,63 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             } catch (Exception ex) {
                 Logger.Warning($"Live view recovery failed; leaving the capture status as it is. {ex.Message}");
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// How many exposures may deliver nothing in a row before the plugin
+        /// stops driving the camera. Zero disables the cap.
+        /// </summary>
+        private int MaxConsecutiveFailures {
+            get {
+                try {
+                    var raw = _pluginSettings.GetValueString(nameof(SonyCamera.MaxConsecutiveCaptureFailures), DEFAULT_MAX_CAPTURE_FAILURES.ToString());
+                    return int.TryParse(raw, out var n) && n >= 0 ? n : DEFAULT_MAX_CAPTURE_FAILURES;
+                } catch (Exception ex) {
+                    Logger.Warning($"MaxConsecutiveCaptureFailures read failed; defaulting to {DEFAULT_MAX_CAPTURE_FAILURES}. {ex.Message}");
+                    return DEFAULT_MAX_CAPTURE_FAILURES;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Closes and reopens the camera in place, keeping the same connection as
+        /// far as the host is concerned.
+        /// <para>
+        /// <see cref="Connected"/> is computed from the handle, so the close and
+        /// the open both happen inside <c>connectionLock</c> and nothing outside
+        /// ever observes the gap. That matters: a camera NINA believes has
+        /// disconnected ends the sequence, which is the opposite of what this is
+        /// for.
+        /// </para>
+        /// <para>
+        /// This is the recovery that works on this body. A reconnect cleared a
+        /// stuck capture three times by hand on 2026-11-03, including one the
+        /// camera was holding open, where nothing else did.
+        /// </para>
+        /// </summary>
+        private bool ReopenCamera() {
+            lock (connectionLock) {
+                var camera = _camera;
+                if (camera == null) {
+                    return false;
+                }
+                try {
+                    _driver.CloseCamera(camera.Handle);
+                } catch (Exception ex) {
+                    // Worth continuing: a close that fails on a camera that has
+                    // stopped answering is expected, and the open below is the
+                    // part that matters.
+                    Logger.Warning($"Closing the camera before reopening it failed: {ex.Message}");
+                }
+                _camera = null;
+                try {
+                    _camera = _driver.OpenCamera(_device.Id);
+                } catch (Exception ex) {
+                    Logger.Error("Reopening the camera failed.", ex);
+                    _camera = null;
+                }
+                return _camera != null;
             }
         }
 
@@ -671,9 +734,16 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 try {
                     await _capture.WaitUntilReady(token);
                 } catch (OperationCanceledException) {
+                    // NINA cancels this token when its own "image ready after
+                    // exposuretime + 20 seconds" timer expires, which is the
+                    // failure that ends nights, and it looks identical here to a
+                    // user pressing abort. Counting both is deliberate: a user
+                    // abort costs one reopen, and a reopen is harmless.
+                    _capture.MarkCaptureFailed();
                     Logger.Info("WaitUntilExposureIsReady cancelled.");
                     throw;
                 } catch (Exception ex) {
+                    _capture.MarkCaptureFailed();
                     Logger.Error("WaitUntilExposureIsReady got exception.", ex);
                     throw new SonyException("Problem while waiting for image to be ready (see log)");
                 }
@@ -686,6 +756,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 SonyExposureFrame image;
                 try {
                     image = _driver.GetLastImage();
+                } catch (Exception) {
+                    _capture.MarkCaptureFailed();
+                    throw;
                 } finally {
                     // This call is the image coming off the camera, so it is the
                     // end of the traffic the quiet gap has to separate from the
@@ -696,6 +769,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     // let the next frame start immediately.
                     _capture.MarkImageRetrieved();
                 }
+                // An image actually came off the camera. The only evidence that
+                // clears the failure count, and distinct from MarkImageRetrieved
+                // above, which times the quiet gap and runs even on a throw.
+                _capture.MarkCaptureSucceeded();
                 var metaData = new ImageMetaData();
                 double temperature = image.Pixels == null ? SonyCameraTemperature.Read(image.RawBytes) : double.NaN;
                 metaData.Camera.Temperature = temperature;

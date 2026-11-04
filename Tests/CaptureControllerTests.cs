@@ -133,6 +133,95 @@ public class CaptureControllerTests {
     }
 
     [Fact]
+    public void AFailedExposureMakesTheNextStartReopenTheCamera() {
+        // The gap that ended the night of 2026-11-03: an exposure stopped
+        // announcing its image and nothing ever tried a reconnect, which is the
+        // one recovery that works on this body. It is done before the next start
+        // rather than at the moment of failure, because that is when nothing is
+        // in flight.
+        var camera = new Camera();
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Recoveries);
+        Assert.Equal(1, camera.Starts);
+        Assert.Contains("reopened the camera after 1 failed exposure(s)", camera.RecoveryReports);
+    }
+
+    [Fact]
+    public void AnImageComingOffTheCameraClearsTheFailureCount() {
+        var camera = new Camera();
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.MarkCaptureSucceeded();
+        camera.Capture.Start(1);
+        Assert.Equal(0, camera.Recoveries);
+        Assert.Equal(1, camera.Starts);
+    }
+
+    [Fact]
+    public void RetrievingAnImageIsNotByItselfEvidenceOfSuccess() {
+        // MarkImageRetrieved times the quiet gap and runs even when the
+        // retrieval threw, so it must not clear the failure count on its own.
+        var camera = new Camera();
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.MarkImageRetrieved();
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Recoveries);
+    }
+
+    [Fact]
+    public void TheCameraIsNotDrivenAtAllOnceTheFailureCapIsReached() {
+        // The whole point of the cap. On 2026-11-03 the sequence retried every
+        // 50 seconds for twenty minutes until a native call exceeded the 30s
+        // timeout that latches the driver dead for the rest of the process -
+        // after which the camera could not even be enumerated, so a reconnect
+        // could no longer have saved the session. Refusing makes no native calls,
+        // so the driver stays usable.
+        var camera = new Camera { MaxFailures = 3 };
+        for (int i = 0; i < 3; i++) camera.Capture.MarkCaptureFailed();
+
+        var error = Record.Exception(() => camera.Capture.Start(1));
+        Assert.IsType<InvalidOperationException>(error);
+        Assert.Contains("delivered no image", error.Message);
+        Assert.Equal(0, camera.Starts);
+        Assert.Equal(0, camera.Recoveries);
+    }
+
+    [Fact]
+    public void BelowTheCapTheExposureStillRuns() {
+        var camera = new Camera { MaxFailures = 3 };
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Starts);
+        Assert.Equal(1, camera.Recoveries);
+    }
+
+    [Fact]
+    public void AZeroCapNeverRefuses() {
+        var camera = new Camera { MaxFailures = 0 };
+        for (int i = 0; i < 20; i++) camera.Capture.MarkCaptureFailed();
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Starts);
+    }
+
+    [Fact]
+    public void ARecoveryThatFailsOrThrowsStillLetsTheExposureRun() {
+        // A reopen is an attempt, not a precondition. Refusing to shoot because
+        // the recovery failed would lose frames the camera might still deliver.
+        var camera = new Camera { RecoverSucceeds = false };
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Starts);
+        Assert.Contains("could not reopen the camera after 1 failed exposure(s); starting the exposure anyway", camera.RecoveryReports);
+
+        var thrower = new Camera { RecoverThrows = new InvalidOperationException("boom") };
+        thrower.Capture.MarkCaptureFailed();
+        thrower.Capture.Start(1);
+        Assert.Equal(1, thrower.Starts);
+        Assert.Contains(thrower.RecoveryReports, r => r.Contains("threw: boom"));
+    }
+
+    [Fact]
     public void TheNextStartWaitsOutAnExposureThatWasCancelledMidFlight() {
         // Cancelling does not close a shutter the camera has already opened, and
         // the shutter speed cannot be changed while it is open. Measured on the
@@ -322,6 +411,13 @@ public class CaptureControllerTests {
         internal int LastWaitReportedMs;
         internal int AbortedCaptureWaits;
         internal int LastAbortedCaptureWaitMs;
+        // Recovery instrumentation. The cap defaults to 0 - disabled - so every
+        // test written before it existed behaves exactly as it did.
+        internal int Recoveries;
+        internal bool RecoverSucceeds = true;
+        internal Exception RecoverThrows;
+        internal int MaxFailures;
+        internal readonly System.Collections.Generic.List<string> RecoveryReports = new System.Collections.Generic.List<string>();
         internal int RecoveryAttempts;
         internal Func<bool> Recover;
         internal readonly ManualTimeProvider Clock = new ManualTimeProvider();
@@ -353,7 +449,14 @@ public class CaptureControllerTests {
                 // is asserted on rather than waited out.
                 sleep: ms => { SleptMs += ms; Clock.Advance(TimeSpan.FromMilliseconds(ms)); },
                 onWaited: ms => { WaitsReported++; LastWaitReportedMs = ms; },
-                onWaitedForAbortedCapture: ms => { AbortedCaptureWaits++; LastAbortedCaptureWaitMs = ms; });
+                onWaitedForAbortedCapture: ms => { AbortedCaptureWaits++; LastAbortedCaptureWaitMs = ms; },
+                recoverCamera: () => {
+                    Recoveries++;
+                    if (RecoverThrows != null) throw RecoverThrows;
+                    return RecoverSucceeds;
+                },
+                maxConsecutiveFailures: () => MaxFailures,
+                onRecovery: what => RecoveryReports.Add(what));
         }
     }
 
