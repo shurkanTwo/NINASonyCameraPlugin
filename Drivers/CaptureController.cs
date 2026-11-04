@@ -54,6 +54,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // camera at all. See RefuseIfTooManyFailures for why that is the point.
         private readonly Func<int> maxConsecutiveFailures;
         private readonly Action<string> onRecovery;
+        private readonly Func<bool> recoveryEnabled;
         private int consecutiveFailures;
         // How long a capture this thread has just started may take to show up
         // in the status before the deferred cancel gives up on it.
@@ -82,7 +83,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             TimeProvider clock = null, Action<int> sleep = null, Action<int> onWaited = null,
             Action<string> onAbortDecision = null, Action<int> onWaitedForAbortedCapture = null,
             Func<bool> recoverCamera = null, Func<int> maxConsecutiveFailures = null,
-            Action<string> onRecovery = null) {
+            Action<string> onRecovery = null, Func<bool> recoveryEnabled = null) {
             this.getStatus = getStatus;
             this.startCapture = startCapture;
             this.cancelCapture = cancelCapture;
@@ -98,6 +99,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             this.recoverCamera = recoverCamera;
             this.maxConsecutiveFailures = maxConsecutiveFailures ?? (() => 0);
             this.onRecovery = onRecovery;
+            this.recoveryEnabled = recoveryEnabled ?? (() => recoverCamera != null);
         }
 
         private void ReportAbort(string why) {
@@ -210,6 +212,26 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         }
 
         /// <summary>
+        /// Clears the failure count because the camera has been reconnected.
+        /// <para>
+        /// Without this the cap is a trap rather than a guard. Only an image
+        /// coming off the camera clears the count, and once the cap refuses
+        /// every start no image can ever be taken, so the camera stays refused
+        /// until the host process restarts. Measured on the rig 2026-11-04: the
+        /// cap tripped at 10:31:29, a full disconnect and reconnect followed at
+        /// 10:34:44, and the next start was still refused.
+        /// </para>
+        /// <para>
+        /// A reconnect is the operator - or a recovery trigger - saying try
+        /// again, and it is also the thing that actually clears this body. So it
+        /// gets a clean slate.
+        /// </para>
+        /// </summary>
+        internal void ResetFailureCount() {
+            Interlocked.Exchange(ref consecutiveFailures, 0);
+        }
+
+        /// <summary>
         /// Stops driving a camera that has failed too many times in a row.
         /// <para>
         /// This is the fault that ends nights. On 2026-11-03 at 23:23 an exposure
@@ -259,6 +281,14 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         /// </summary>
         private void RecoverIfTheLastExposureFailed() {
             if (recoverCamera == null || Volatile.Read(ref consecutiveFailures) == 0) {
+                return;
+            }
+            // Asked before invoking, so a disabled recovery reports nothing at
+            // all. Letting the callback answer false instead logged "could not
+            // reopen the camera", which reads as a failed attempt when nothing
+            // was attempted - the same dishonest-status trap this whole plugin
+            // has been fixing.
+            if (!recoveryEnabled()) {
                 return;
             }
             int failures = Volatile.Read(ref consecutiveFailures);

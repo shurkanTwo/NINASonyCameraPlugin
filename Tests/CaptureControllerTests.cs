@@ -133,6 +133,36 @@ public class CaptureControllerTests {
     }
 
     [Fact]
+    public void AReconnectClearsTheFailureCap() {
+        // Without this the cap is a trap, not a guard: only an image clears the
+        // count, and once the cap refuses every start no image can be taken, so
+        // the camera stays refused until the host restarts. Measured on the rig
+        // 2026-11-04: the cap tripped at 10:31:29, a full disconnect and
+        // reconnect followed at 10:34:44, and the next start was still refused.
+        var camera = new Camera { MaxFailures = 3 };
+        for (int i = 0; i < 3; i++) camera.Capture.MarkCaptureFailed();
+        Assert.IsType<InvalidOperationException>(Record.Exception(() => camera.Capture.Start(1)));
+
+        camera.Capture.ResetFailureCount();
+
+        camera.Capture.Start(1);
+        Assert.Equal(1, camera.Starts);
+        Assert.Equal(0, camera.Recoveries);
+    }
+
+    [Fact]
+    public void ADisabledRecoveryReportsNothingRatherThanAFailedAttempt() {
+        // Letting the callback answer false logged "could not reopen the
+        // camera", which reads as a failed attempt when nothing was attempted.
+        var camera = new Camera { RecoveryEnabled = false };
+        camera.Capture.MarkCaptureFailed();
+        camera.Capture.Start(1);
+        Assert.Equal(0, camera.Recoveries);
+        Assert.Empty(camera.RecoveryReports);
+        Assert.Equal(1, camera.Starts);
+    }
+
+    [Fact]
     public void AFailedExposureMakesTheNextStartReopenTheCamera() {
         // The gap that ended the night of 2026-11-03: an exposure stopped
         // announcing its image and nothing ever tried a reconnect, which is the
@@ -417,6 +447,7 @@ public class CaptureControllerTests {
         internal bool RecoverSucceeds = true;
         internal Exception RecoverThrows;
         internal int MaxFailures;
+        internal bool RecoveryEnabled = true;
         internal readonly System.Collections.Generic.List<string> RecoveryReports = new System.Collections.Generic.List<string>();
         internal int RecoveryAttempts;
         internal Func<bool> Recover;
@@ -456,7 +487,8 @@ public class CaptureControllerTests {
                     return RecoverSucceeds;
                 },
                 maxConsecutiveFailures: () => MaxFailures,
-                onRecovery: what => RecoveryReports.Add(what));
+                onRecovery: what => RecoveryReports.Add(what),
+                recoveryEnabled: () => RecoveryEnabled);
         }
     }
 

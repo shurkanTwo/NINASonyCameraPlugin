@@ -84,9 +84,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 onAbortDecision: why => Logger.Info($"Abort decision: {why}."),
                 onWaitedForAbortedCapture: ms => Logger.Info(
                     $"Waited {ms}ms for a cancelled exposure to finish on the camera; the shutter it had already opened cannot be changed while it is open."),
-                recoverCamera: ReopenCameraIfEnabled,
+                recoverCamera: ReopenCamera,
                 maxConsecutiveFailures: () => MaxConsecutiveFailures,
-                onRecovery: what => Logger.Warning($"Camera recovery: {what}."));
+                onRecovery: what => Logger.Warning($"Camera recovery: {what}."),
+                recoveryEnabled: () => CameraReopenOnFailureEnabled);
         }
 
         #region Internal Helpers
@@ -218,14 +219,6 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         /// camera was holding open, where nothing else did.
         /// </para>
         /// </summary>
-        private bool ReopenCameraIfEnabled() {
-            if (!CameraReopenOnFailureEnabled) {
-                Logger.Info("A previous exposure delivered no image; not reopening the camera because that option is off.");
-                return false;
-            }
-            return ReopenCamera();
-        }
-
         private bool CameraReopenOnFailureEnabled {
             get {
                 try {
@@ -655,6 +648,13 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                         _camera = null;
                     }
                     connected = _camera != null;
+                    if (connected) {
+                        // A reconnect is a clean slate. Without this the failure
+                        // cap can never be cleared, because only an image coming
+                        // off the camera clears it and the cap refuses every
+                        // start - see CaptureController.ResetFailureCount.
+                        _capture.ResetFailureCount();
+                    }
                 }
 
                 NotifyGainPropertiesChanged();
