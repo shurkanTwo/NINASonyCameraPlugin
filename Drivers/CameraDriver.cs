@@ -34,9 +34,12 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         // them. Three short reads is what clears it by hand; more would only
         // delay the start that follows.
         // Quiet gap applied between captures whose exposure is shorter than it.
-        private const int DEFAULT_CAPTURE_INTERVAL_MS = 4000;
-        // Three is enough to ride out a transient camera, and few enough to
-        // stop well before a native call can latch the driver dead.
+        private const int DEFAULT_CAPTURE_INTERVAL_MS = 4000;
+
+        // Three is enough to ride out a transient camera, and few enough to
+
+        // stop well before a native call can latch the driver dead.
+
         private const int DEFAULT_MAX_CAPTURE_FAILURES = 3;
 
         private const int LIVEVIEW_RECOVERY_READS = 3;
@@ -81,7 +84,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 onAbortDecision: why => Logger.Info($"Abort decision: {why}."),
                 onWaitedForAbortedCapture: ms => Logger.Info(
                     $"Waited {ms}ms for a cancelled exposure to finish on the camera; the shutter it had already opened cannot be changed while it is open."),
-                recoverCamera: ReopenCamera,
+                recoverCamera: ReopenCameraIfEnabled,
                 maxConsecutiveFailures: () => MaxConsecutiveFailures,
                 onRecovery: what => Logger.Warning($"Camera recovery: {what}."));
         }
@@ -215,6 +218,26 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         /// camera was holding open, where nothing else did.
         /// </para>
         /// </summary>
+        private bool ReopenCameraIfEnabled() {
+            if (!CameraReopenOnFailureEnabled) {
+                Logger.Info("A previous exposure delivered no image; not reopening the camera because that option is off.");
+                return false;
+            }
+            return ReopenCamera();
+        }
+
+        private bool CameraReopenOnFailureEnabled {
+            get {
+                try {
+                    var raw = _pluginSettings.GetValueString(nameof(SonyCamera.EnableCameraReopenOnFailure), bool.FalseString);
+                    return bool.TryParse(raw, out var enabled) && enabled;
+                } catch (Exception ex) {
+                    Logger.Warning($"EnableCameraReopenOnFailure read failed; defaulting to false. {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
         private bool ReopenCamera() {
             lock (connectionLock) {
                 var camera = _camera;

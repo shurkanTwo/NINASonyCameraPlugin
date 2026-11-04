@@ -185,6 +185,33 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera {
             }
         }
 
+        /// <summary>
+        /// Whether a failed exposure makes the next one reopen the camera first.
+        /// <para>
+        /// Off by default, and the default is the measurement: on 2026-11-04 the
+        /// reopen itself worked - the log read "reopened the camera after 1
+        /// failed exposure(s)" - and the exposure that followed it then timed
+        /// out, where the same exposure landed three times out of three without
+        /// the reopen. Something about a freshly reopened handle stops the next
+        /// capture delivering, and until that is understood a reopen costs the
+        /// frame it was meant to save.
+        /// </para>
+        /// <para>
+        /// The failure cap is separate and stays on: it makes no native calls at
+        /// all, so it cannot have this problem.
+        /// </para>
+        /// </summary>
+        public bool EnableCameraReopenOnFailure {
+            get {
+                var raw = pluginSettings.GetValueString(nameof(EnableCameraReopenOnFailure), bool.FalseString);
+                return bool.TryParse(raw, out var enabled) && enabled;
+            }
+            set {
+                pluginSettings.SetValueString(nameof(EnableCameraReopenOnFailure), value.ToString());
+                RaisePropertyChanged();
+            }
+        }
+
         public event PropertyChangedEventHandler PropertyChanged;
         protected void RaisePropertyChanged([CallerMemberName] string propertyName = null) {
             this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
