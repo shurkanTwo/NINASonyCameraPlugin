@@ -439,6 +439,10 @@ public class CaptureControllerTests {
         internal int SleptMs;
         internal int WaitsReported;
         internal int LastWaitReportedMs;
+        internal int LastWaitRequiredMs;
+        // Applied the first time the guard sleeps, to change the setting out
+        // from under a wait that is already running.
+        internal int? IntervalToSetOnFirstSleep;
         internal int AbortedCaptureWaits;
         internal int LastAbortedCaptureWaitMs;
         // Recovery instrumentation. The cap defaults to 0 - disabled - so every
@@ -478,8 +482,19 @@ public class CaptureControllerTests {
                 clock: Clock,
                 // Advance the test clock instead of really sleeping, so the wait
                 // is asserted on rather than waited out.
-                sleep: ms => { SleptMs += ms; Clock.Advance(TimeSpan.FromMilliseconds(ms)); },
-                onWaited: ms => { WaitsReported++; LastWaitReportedMs = ms; },
+                sleep: ms => {
+                    SleptMs += ms;
+                    Clock.Advance(TimeSpan.FromMilliseconds(ms));
+                    if (IntervalToSetOnFirstSleep.HasValue) {
+                        MinIntervalMs = IntervalToSetOnFirstSleep.Value;
+                        IntervalToSetOnFirstSleep = null;
+                    }
+                },
+                onWaited: (ms, required) => {
+                    WaitsReported++;
+                    LastWaitReportedMs = ms;
+                    LastWaitRequiredMs = required;
+                },
                 onWaitedForAbortedCapture: ms => { AbortedCaptureWaits++; LastAbortedCaptureWaitMs = ms; },
                 recoverCamera: () => {
                     Recoveries++;
@@ -536,27 +551,34 @@ public class CaptureControllerTests {
         Assert.InRange(camera.SleptMs, 100, 150);
     }
 
+    // A long exposure gives the camera no rest - the shutter is open for it,
+    // and the curtain only rests between frames - so the gap is owed whatever
+    // the exposure length. The three 30s subs lost on the rig overnight on
+    // 2026-11-19 were long frames the old rule never gated.
     [Fact]
-    public async Task AnExposureLongerThanTheGapIsNotDelayed() {
+    public async Task AnExposureLongerThanTheGapStillWaits() {
         var camera = new Camera { MinIntervalMs = 4000 };
         camera.Capture.Start(30);
         camera.Status = 4;
         await camera.Capture.WaitUntilReady(CancellationToken.None);
         camera.Status = 4;
         camera.Capture.Start(30);
-        Assert.Equal(0, camera.SleptMs);
+        Assert.InRange(camera.SleptMs, 4000, 4050);
         Assert.Equal(2, camera.Starts);
     }
 
+    // The exact-equality case is the one that bit on the rig 2026-11-20 17:07:
+    // 2s frames against a 2000ms gap skipped the wait altogether and ran
+    // 0.8-1.2s apart.
     [Fact]
-    public async Task AnExposureExactlyTheLengthOfTheGapIsNotDelayed() {
+    public async Task AnExposureExactlyTheLengthOfTheGapStillWaits() {
         var camera = new Camera { MinIntervalMs = 4000 };
         camera.Capture.Start(4);
         camera.Status = 4;
         await camera.Capture.WaitUntilReady(CancellationToken.None);
         camera.Status = 4;
         camera.Capture.Start(4);
-        Assert.Equal(0, camera.SleptMs);
+        Assert.InRange(camera.SleptMs, 4000, 4050);
     }
 
     [Fact]
@@ -594,16 +616,20 @@ public class CaptureControllerTests {
         Assert.Equal(2, camera.Starts);
     }
 
+    // Turnaround already spent counts, so a long sub pays only the shortfall.
+    // This is what keeps the change off the night's throughput: a 30s sub whose
+    // turnaround is already 3s pays 1s more to reach a 4s gap, not 4s.
     [Fact]
-    public async Task ALongExposureIsStillNotDelayedOnceTheImageIsRetrieved() {
+    public async Task ALongExposureWaitsOnlyTheShortfallOfTheGap() {
         var camera = new Camera { MinIntervalMs = 4000 };
         camera.Capture.Start(30);
         camera.Status = 4;
         await camera.Capture.WaitUntilReady(CancellationToken.None);
         camera.Capture.MarkImageRetrieved();
+        camera.Clock.Advance(TimeSpan.FromMilliseconds(3000));
         camera.Status = 4;
         camera.Capture.Start(30);
-        Assert.Equal(0, camera.SleptMs);
+        Assert.InRange(camera.SleptMs, 1000, 1050);
         Assert.Equal(2, camera.Starts);
     }
 
@@ -625,9 +651,30 @@ public class CaptureControllerTests {
         camera.Capture.Start(30);
         camera.Status = 4;
         await camera.Capture.WaitUntilReady(CancellationToken.None);
+        // The whole gap has already gone by in turnaround, so there is nothing
+        // left to wait out and nothing to report.
+        camera.Clock.Advance(TimeSpan.FromMilliseconds(4000));
         camera.Status = 4;
         camera.Capture.Start(30);
         Assert.Equal(0, camera.WaitsReported);
+        Assert.Equal(0, camera.SleptMs);
+    }
+
+    // The reported gap is the one the wait was measured against, not whatever
+    // the setting says by the time the message is written. Changing it mid-wait
+    // must not alter the wait or the line describing it.
+    [Fact]
+    public async Task TheReportedGapIsTheOneTheWaitUsed() {
+        var camera = new Camera { MinIntervalMs = 4000 };
+        camera.Capture.Start(0.01f);
+        camera.Status = 4;
+        await camera.Capture.WaitUntilReady(CancellationToken.None);
+        camera.Status = 4;
+        camera.IntervalToSetOnFirstSleep = 1000;
+        camera.Capture.Start(0.01f);
+        Assert.Equal(1, camera.WaitsReported);
+        Assert.InRange(camera.SleptMs, 4000, 4050);
+        Assert.Equal(4000, camera.LastWaitRequiredMs);
     }
 
     [Fact]

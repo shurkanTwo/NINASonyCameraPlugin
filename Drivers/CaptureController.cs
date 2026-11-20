@@ -35,9 +35,14 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private readonly Func<bool> recoverStuckCapture;
         private readonly TimeProvider clock;
         private readonly Action<int> sleep;
-        // Reports a wait that actually happened, so the guard is visible in the
-        // log instead of having to be inferred from capture timestamps.
-        private readonly Action<int> onWaited;
+        // Reports a wait that actually happened - how long it slept, and the gap
+        // it was satisfying - so the guard is visible in the log instead of
+        // having to be inferred from capture timestamps. The gap is passed out
+        // rather than re-read by the logger, because the setting can be changed
+        // while a wait is already running and a message that re-reads it then
+        // names a value the wait never used. The rig logged exactly that on
+        // 2026-11-20 16:42:53: "Waited 3482ms ... ended less than 2000ms ago".
+        private readonly Action<int, int> onWaited;
         // Reports why an abort took the path it did. Abort has six exits and the
         // log said only "native cancel unavailable" for all of them, which left
         // a disabled setting and a contended lock indistinguishable - and a
@@ -80,7 +85,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         internal CaptureController(Func<uint> getStatus, Action<float> startCapture,
             Func<bool> cancelCapture, Func<bool> nativeCancelEnabled, int cancelLockTimeoutMs = 1000,
             Func<int> minCaptureIntervalMs = null, Func<bool> recoverStuckCapture = null,
-            TimeProvider clock = null, Action<int> sleep = null, Action<int> onWaited = null,
+            TimeProvider clock = null, Action<int> sleep = null, Action<int, int> onWaited = null,
             Action<string> onAbortDecision = null, Action<int> onWaitedForAbortedCapture = null,
             Func<bool> recoverCamera = null, Func<int> maxConsecutiveFailures = null,
             Action<string> onRecovery = null, Func<bool> recoveryEnabled = null) {
@@ -111,11 +116,26 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         /// image came off it - see <see cref="MarkImageRetrieved"/> for why that
         /// is the moment that matters rather than the end of the exposure.
         /// <para>
-        /// Only exposures shorter than the gap wait. A frame that already takes
-        /// longer than the gap has given the camera that much time anyway, and
-        /// charging it again would cost real sky: 4s added to every 30s sub is a
-        /// seventh of the night. The wedge is a short-exposure failure - flats and
-        /// bias - so that is where the wait belongs.
+        /// The gap is measured against the turnaround - how long the camera has
+        /// actually been idle since the last image left it - and never against
+        /// the exposure length. It used to skip the wait entirely whenever the
+        /// exposure was at least as long as the gap, on the reasoning that such a
+        /// frame had given the camera that much time anyway. It had not: during
+        /// an exposure the shutter is open, not resting, and the curtain only
+        /// rests between frames.
+        /// </para>
+        /// <para>
+        /// Measured on the rig 2026-11-20 17:07. 2s frames with the gap set to
+        /// 2000ms hit that skip exactly, and ran with 0.8-1.2s between the image
+        /// coming off the camera and the next shutter release. The same body had
+        /// stuck its shutter curtain at a 3.15s turnaround earlier that
+        /// afternoon. The three 30s subs lost overnight on 2026-11-19 were long
+        /// frames, which the old rule never gated at all.
+        /// </para>
+        /// <para>
+        /// Only the shortfall is charged, because the wait counts time already
+        /// elapsed since the image was retrieved. A 30s sub whose turnaround is
+        /// already 3s pays 3s to reach a 6s gap, not 6s.
         /// </para>
         /// <para>
         /// Deliberately outside <see cref="captureLock"/>: holding that here would
@@ -123,12 +143,9 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         /// the length of the wait.
         /// </para>
         /// </summary>
-        private void WaitForQuietGap(float exposureTime) {
+        private void WaitForQuietGap() {
             int required = Math.Max(0, minCaptureIntervalMs());
             if (required == 0 || !haveCaptureEnd) {
-                return;
-            }
-            if (exposureTime * 1000.0 >= required) {
                 return;
             }
             int slept = 0;
@@ -143,7 +160,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                 slept += slice;
             }
             if (slept > 0) {
-                onWaited?.Invoke(slept);
+                onWaited?.Invoke(slept, required);
             }
         }
 
@@ -393,7 +410,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             RefuseIfTooManyFailures();
             WaitForAnAbortedExposureToFinish();
             RecoverIfTheLastExposureFailed();
-            WaitForQuietGap(exposureTime);
+            WaitForQuietGap();
             lock (captureLock) {
                 var request = new CaptureRequest();
                 lock (requestLock) {
