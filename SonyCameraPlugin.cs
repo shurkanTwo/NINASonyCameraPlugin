@@ -147,9 +147,11 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera {
 
         /// <summary>
         /// Quiet gap enforced between captures, in milliseconds; 0 disables it.
-        /// Only exposures shorter than the gap wait for it, so light frames are
-        /// unaffected and the cost falls on flats and bias, where the wedge
-        /// happens.
+        /// Measured from the moment an image finishes coming off the camera to
+        /// the next exposure starting, and owed by every frame whatever its
+        /// length: the shutter is open during an exposure, not resting. Only the
+        /// shortfall is waited out, so a frame whose turnaround already exceeds
+        /// the gap costs nothing.
         /// </summary>
         public int MinCaptureIntervalMs {
             get {
