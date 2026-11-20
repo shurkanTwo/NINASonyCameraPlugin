@@ -4,6 +4,14 @@ using Sony;
 namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
     public interface ISonyCameraBackend {
         IEnumerable<SonyDevice> Cameras();
+
+        /// <summary>
+        /// Lets a driver that stopped responding be used again, when it is safe
+        /// to. False means only a restart will clear it. Connect asks for this
+        /// before opening, so a camera that came back is reachable again.
+        /// </summary>
+        bool TryResumeAfterFailure();
+
         SonyCameraInfo OpenCamera(string id);
         void CloseCamera(uint handle);
         bool IsOpen(uint handle);

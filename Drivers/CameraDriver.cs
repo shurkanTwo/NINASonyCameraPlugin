@@ -641,6 +641,15 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
                     Volatile.Write(ref _lastCameraTemperature, double.NaN);
                     _lastKnownGain = -1;
                     _lastKnownBatteryLevel = 0;
+                    // A driver that stopped responding used to stay stopped for
+                    // the life of the process, so a camera that came back - body
+                    // power-cycled, USB replugged, device enumerating again - was
+                    // still unreachable and the night ended on a NINA restart.
+                    // The open below is attempted either way: when the resume is
+                    // refused, its exception says so with the reason.
+                    if (!_driver.TryResumeAfterFailure()) {
+                        Logger.Error("The Sony driver is still stopped: a native call that timed out has not returned yet, so letting another one in would race it. Restart NINA to use the camera again.");
+                    }
                     try {
                         _camera = _driver.OpenCamera(_device.Id);
                     } catch (Exception ex) {
