@@ -6,6 +6,7 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
         private readonly SonyDriver driver = SonyDriver.GetInstance();
 
         public IEnumerable<SonyDevice> Cameras() => driver.Cameras();
+        public bool TryResumeAfterFailure() => driver.TryResumeAfterFailure();
         public SonyCameraInfo OpenCamera(string id) => driver.OpenCamera(id);
         public void CloseCamera(uint handle) => driver.CloseCamera(handle);
         public bool IsOpen(uint handle) => driver.IsOpen(handle);

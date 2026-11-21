@@ -34,9 +34,9 @@ namespace Sony {
                 return calls.Invoke(action, timeoutMs, lockTimeoutMs);
             } catch (Exception ex) {
                 if (calls.IsUnavailable && Interlocked.Exchange(ref timeoutNotified, 1) == 0) {
-                    Logger.Error($"Sony driver stopped responding while trying to {operation}. Restart NINA and power-cycle the camera before reconnecting.", ex);
+                    Logger.Error($"Sony driver stopped responding while trying to {operation}. Reconnect the camera; restart NINA only if the reconnect does not clear it.", ex);
                     try {
-                        Notification.ShowError("Sony driver stopped responding. Restart NINA and power-cycle the camera before reconnecting.");
+                        Notification.ShowError("Sony driver stopped responding. Reconnect the camera; restart NINA only if that does not clear it.");
                     } catch (Exception notificationError) {
                         Logger.Warning($"Could not show Sony driver timeout notification: {notificationError.Message}");
                     }
@@ -64,11 +64,40 @@ namespace Sony {
                         _camera = null;
                         _sonydll.DiscardLastImage();
                         calls.Stop();
-                        Logger.Error($"Sony camera failed {consecutiveFailures} consecutive native operations while trying to {operation}. Treating it as disconnected; restart NINA and power-cycle the camera before reconnecting.", ex);
+                        Logger.Error($"Sony camera failed {consecutiveFailures} consecutive native operations while trying to {operation}. Treating it as disconnected; power-cycle the camera and reconnect it.", ex);
                     }
                     throw;
                 }
             }, timeoutMs, lockTimeoutMs);
+        }
+
+        /// <summary>
+        /// Clears a stopped driver so a reconnect can reach the camera again.
+        /// </summary>
+        /// <remarks>
+        /// Without this the only way out of a stopped driver was a NINA
+        /// restart, even once the camera was demonstrably back: on 20 November
+        /// the body returned to the USB bus at 01:22 and a connect at 01:24
+        /// was refused in 34ms without a single native call being attempted.
+        /// No native call is made here either - the reopen is what talks to the
+        /// device, inside its own bounded operation, and it discards any image
+        /// the stopped session left behind.
+        /// </remarks>
+        /// <returns>
+        /// True when the driver can be used again. False only when a native
+        /// call that timed out has still not returned, which needs a restart.
+        /// </returns>
+        public bool TryResumeAfterFailure() {
+            if (!calls.IsUnavailable) return true;
+            if (!calls.TryResume()) return false;
+            // The handle open when the driver stopped is gone - the device was
+            // unresponsive by definition - and OpenCamera refuses while a
+            // camera is still recorded as open.
+            _camera = null;
+            consecutiveFailures = 0;
+            knownGoodProperties.Clear();
+            Interlocked.Exchange(ref timeoutNotified, 0);
+            return true;
         }
 
         public IEnumerable<SonyDevice> Cameras() => Invoke("enumerate cameras", () => {

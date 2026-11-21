@@ -1,4 +1,4 @@
-using NINA.Core.Utility;
+﻿using NINA.Core.Utility;
 using System;
 using System.Buffers;
 using System.Collections;
@@ -78,6 +78,13 @@ namespace Sony {
         private dSetPropertyValue fSetPropertyValue;
         private dGetCameraInfo fGetCameraInfo;
         private dGetPreviewImage fGetPreviewImage;
+        // Sanity bounds on counts the camera reports. An a7S advertises a few
+        // dozen properties and at most a few hundred options for the widest of
+        // them, so these are generous by two orders of magnitude and exist only
+        // to catch a camera answering with nonsense.
+        private const uint MAX_PROPERTY_LIST = 4096;
+        private const uint MAX_PROPERTY_OPTIONS = 4096;
+
         private dStartCapture fStartCapture;
         private dGetCaptureStatus fGetCaptureStatus;
         private dCancelCapture fCancelCapture;
@@ -367,24 +374,57 @@ namespace Sony {
         }
 
         public int[] GetPropertyList(UInt32 hCamera) {
-            UInt32 listSize = 0;
-            IntPtr listPtr = IntPtr.Zero;
+            // A size-then-fill native call, hardened three ways because a camera
+            // that has stopped functioning answers with whatever it likes.
+            //
+            // Measured on the rig 2026-11-04: the camera returned
+            // ERROR_GEN_FAILURE (0x8007001f), the driver logged "Unable to read
+            // WORD/DWORD value as it would extend beyond end of data" three
+            // times, and a second later NINA died with an access violation
+            // inside coreclr - twice, at the same fault offset. An AV in the
+            // managed runtime means the heap was already corrupt, and this is
+            // where that happens:
+            //
+            //   - (int)listSize * sizeof(UInt32) overflows for a large count, so
+            //     the allocation can be far smaller than the copy.
+            //   - listSize is passed by reference again, so the second call can
+            //     report MORE than was allocated and the copy runs off the end.
+            //   - the buffer leaks on both throw paths.
+            UInt32 probed = 0;
 
-            if (fGetPropertyList(hCamera, listPtr, ref listSize) != ERROR_RETRY) {
+            if (fGetPropertyList(hCamera, IntPtr.Zero, ref probed) != ERROR_RETRY) {
                 throw new SonyException("Problem getting size of property list");
             }
 
-            int[] ids = new int[listSize];
-            IntPtr pIds = Marshal.AllocCoTaskMem((int)listSize * sizeof(UInt32));
-
-            if (fGetPropertyList(hCamera, pIds, ref listSize) != ERROR_SUCCESS) {
-                throw new SonyException("Problem retrieving list of property ids");
+            if (probed == 0) {
+                return Array.Empty<int>();
             }
 
-            Marshal.Copy(pIds, ids, 0, (int)listSize);
-            Marshal.FreeCoTaskMem(pIds);
+            if (probed > MAX_PROPERTY_LIST) {
+                throw new SonyException(
+                    $"The camera reported {probed} properties, which is not plausible; it has stopped answering correctly. " +
+                    "Power-cycle the camera before reconnecting.");
+            }
 
-            return ids;
+            int allocated = (int)probed;
+            IntPtr pIds = Marshal.AllocCoTaskMem(allocated * sizeof(UInt32));
+
+            try {
+                // Its own copy: whatever the second call does to the count, the
+                // allocation it is measured against cannot change underneath.
+                UInt32 filled = probed;
+
+                if (fGetPropertyList(hCamera, pIds, ref filled) != ERROR_SUCCESS) {
+                    throw new SonyException("Problem retrieving list of property ids");
+                }
+
+                int safe = (int)Math.Min(filled, (UInt32)allocated);
+                int[] ids = new int[safe];
+                Marshal.Copy(pIds, ids, 0, safe);
+                return ids;
+            } finally {
+                Marshal.FreeCoTaskMem(pIds);
+            }
         }
 
         public PropertyDescriptor GetPropertyDescriptor(UInt32 hCamera, UInt32 propertyId) {
@@ -420,6 +460,15 @@ namespace Sony {
 
         public List<PropertyValueOption> GetPropertyValueOptions(UInt32 hCamera, PropertyDescriptor descriptor) {
             List<PropertyValueOption> options = new List<PropertyValueOption>();
+
+            // Same reasoning as the property list: the count comes from the
+            // camera, and a sick one can make this loop run millions of native
+            // calls against a device that is not answering.
+            if (descriptor.ValueCount > MAX_PROPERTY_OPTIONS) {
+                throw new SonyException(
+                    $"The camera reported {descriptor.ValueCount} options for property {descriptor.Id}, which is not plausible; " +
+                    "it has stopped answering correctly. Power-cycle the camera before reconnecting.");
+            }
 
             for (int i = 0; i < descriptor.ValueCount; i++) {
                 options.Add(GetPropertyValueOption(hCamera, descriptor.Id, (uint)i));

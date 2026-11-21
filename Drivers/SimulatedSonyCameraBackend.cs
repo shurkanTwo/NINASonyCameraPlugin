@@ -53,6 +53,10 @@ namespace NINA.RetroKiwi.Plugin.SonyCamera.Drivers {
             });
         }
 
+        // The simulator has no native layer to stop, so there is never a
+        // stopped driver to clear.
+        public bool TryResumeAfterFailure() => true;
+
         public SonyCameraInfo OpenCamera(string id) {
             lock (cameraLock) {
                 if (id != DeviceId) {
